@@ -1,0 +1,3 @@
+soybean 0 1 30
+mung_bean 1 2 50
+white_kidney_bean 2 3 60
