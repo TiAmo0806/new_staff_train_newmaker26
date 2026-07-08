@@ -1,0 +1,28 @@
+# 编译产物
+*.o
+*.out
+*.exe
+build/
+cmake-build-*
+Debug/
+Release/
+# 模型权重文件
+*.pth
+*.onnx
+*.bin
+*.param
+*.model
+*.weights
+# 缓存、日志
+*.log
+*.tmp
+__pycache__/
+*.pyc
+# 系统文件
+.DS_Store
+.vscode/
+.idea/
+# 环境配置
+venv/
+env/
+conda_env/
