@@ -1,0 +1,32 @@
+camera:
+  index: 0
+  exposure_us: 8000
+  gain: 8
+  auto_exposure: true
+
+model:
+  onnx_path: "/home/zst/best.onnx"
+  svm_path: "/home/zst/bean_svm.yml"
+  input_width: 640
+  input_height: 640
+  confidence: 0.35
+  nms_iou: 0.20
+  use_svm: true
+
+serial:
+  port: "/dev/ttyACM0"
+  baudrate: 115200
+  simulated: true
+  tx_log: true
+
+runtime:
+  show_window: true
+  save_video: false
+  log_dir: "logs"
+  terminal_line_limit: 80
+
+planner:
+  # 规则：黄豆->1，绿豆->2，白芸豆->3，4/5 为空箱。
+  min_stable_frames: 3
+  target_center_deadband: 20
+

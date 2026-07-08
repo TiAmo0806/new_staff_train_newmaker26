@@ -1,0 +1,239 @@
+#include "/home/zst/zst/include/ImgProcessing/YoloOrtDetector.h"
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <iostream>
+#include <numeric>
+#include <opencv2/imgproc.hpp>
+#include <stdexcept>
+
+namespace
+{
+const std::vector<std::string> kClassNames = {
+    "soybean", "mung_bean", "white_kidney_bean",
+    "data_1", "data_2", "data_3", "data_4", "data_5"};
+
+float iou(const cv::Rect &a, const cv::Rect &b)
+{
+    const int inter = (a & b).area();
+    const int uni = a.area() + b.area() - inter;
+    return uni > 0 ? static_cast<float>(inter) / uni : 0.0f;
+}
+}
+
+YoloOrtDetector::YoloOrtDetector(const YoloConfig &config)
+    : config_(config),
+      env_(ORT_LOGGING_LEVEL_WARNING, "logistics_yolo"),
+      sessionOptions_(),
+      session_(nullptr)
+{
+    // IntraOpNumThreads 表示单个算子内部用几个线程。
+    // 线程太多反而会抢资源，所以这里先用 2，后续可按虚拟机 CPU 数调整。
+    sessionOptions_.SetIntraOpNumThreads(2);
+
+    // 开启 ONNX Runtime 图优化，能合并一些算子，CPU 推理会更快。
+    sessionOptions_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+
+    // 真正加载 .onnx 模型。如果路径错，这里会直接抛异常。
+    session_ = Ort::Session(env_, config_.modelPath.c_str(), sessionOptions_);
+
+    // 保存输入/输出节点名，Run 时必须传 const char*。
+    // 大部分 YOLO 导出模型只有一个输入和一个输出。
+    auto inputName = session_.GetInputNameAllocated(0, allocator_);
+    auto outputName = session_.GetOutputNameAllocated(0, allocator_);
+    inputNamesText_.push_back(inputName.get());
+    outputNamesText_.push_back(outputName.get());
+    inputNames_.push_back(inputNamesText_[0].c_str());
+    outputNames_.push_back(outputNamesText_[0].c_str());
+
+    std::cout << "[YoloOrt] model loaded: " << config_.modelPath << std::endl;
+}
+
+cv::Mat YoloOrtDetector::letterbox(const cv::Mat &image, LetterBoxInfo &info) const
+{
+    // 等比例缩放后补灰边，推理后再反算回原图坐标。
+    //
+    // 举例：
+    //   原图 1280x1024，模型输入 640x640。
+    //   不能直接压成 640x640，否则箱子和数字会被横向/纵向拉伸。
+    //   letterbox 会缩放成 640x512，再上下补灰边。
+    //   这样 YOLO 框的位置更稳定。
+    const float scale = std::min(static_cast<float>(config_.inputWidth) / image.cols,
+                                 static_cast<float>(config_.inputHeight) / image.rows);
+    const int newW = static_cast<int>(std::round(image.cols * scale));
+    const int newH = static_cast<int>(std::round(image.rows * scale));
+    info.scale = scale;
+    info.padX = (config_.inputWidth - newW) / 2;
+    info.padY = (config_.inputHeight - newH) / 2;
+
+    cv::Mat resized;
+    cv::resize(image, resized, cv::Size(newW, newH));
+    cv::Mat out(config_.inputHeight, config_.inputWidth, CV_8UC3, cv::Scalar(114, 114, 114));
+    resized.copyTo(out(cv::Rect(info.padX, info.padY, newW, newH)));
+    return out;
+}
+
+std::vector<Detection> YoloOrtDetector::infer(const cv::Mat &frame)
+{
+    if (frame.empty()) return {};
+
+    // 1. 图像预处理：BGR -> RGB，HWC -> CHW，归一化到 0~1。
+    // OpenCV 读到的是 BGR，YOLO 训练通常是 RGB。
+    // ONNX Runtime 需要连续的一维 float 数组。
+    // YOLO 输入格式通常是 NCHW：[1, 3, H, W]。
+    LetterBoxInfo lb;
+    cv::Mat input = letterbox(frame, lb);
+    cv::cvtColor(input, input, cv::COLOR_BGR2RGB);
+    input.convertTo(input, CV_32F, 1.0 / 255.0);
+
+    std::vector<float> chw(3 * config_.inputWidth * config_.inputHeight);
+    const int area = config_.inputWidth * config_.inputHeight;
+    for (int y = 0; y < config_.inputHeight; ++y)
+    {
+        const cv::Vec3f *row = input.ptr<cv::Vec3f>(y);
+        for (int x = 0; x < config_.inputWidth; ++x)
+        {
+            for (int c = 0; c < 3; ++c)
+                chw[c * area + y * config_.inputWidth + x] = row[x][c];
+        }
+    }
+
+    std::array<int64_t, 4> inputShape{1, 3, config_.inputHeight, config_.inputWidth};
+    auto memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+    // CreateTensor 不复制数据，只是把 chw 包装成 ONNX Runtime 能读的张量。
+    // 所以 chw 必须在 Run 结束前一直有效。
+    Ort::Value tensor = Ort::Value::CreateTensor<float>(
+        memoryInfo, chw.data(), chw.size(), inputShape.data(), inputShape.size());
+
+    // 2. ONNX Runtime CPU 推理。
+    // outputs[0] 一般形状是：
+    //   [1, 12, 8400]  或 [1, 8400, 12]
+    // 其中 12 = 4个框参数 + 8个类别分数。
+    auto outputs = session_.Run(Ort::RunOptions{nullptr},
+                                inputNames_.data(), &tensor, 1,
+                                outputNames_.data(), 1);
+    const float *data = outputs[0].GetTensorData<float>();
+    auto shapeInfo = outputs[0].GetTensorTypeAndShapeInfo();
+    return postprocess(data, shapeInfo.GetShape(), lb, frame.size());
+}
+
+std::vector<Detection> YoloOrtDetector::postprocess(const float *data, const std::vector<int64_t> &shape,
+                                                    const LetterBoxInfo &info, const cv::Size &imageSize) const
+{
+    if (shape.size() != 3) return {};
+
+    // YOLOv8 常见输出：[1, 4+classes, boxes] 或 [1, boxes, 4+classes]。
+    // 不同导出方式会转置维度，所以这里兼容两种情况。
+    int boxes = 0;
+    int channels = 0;
+    bool transposed = false;
+    if (shape[1] < shape[2])
+    {
+        channels = static_cast<int>(shape[1]);
+        boxes = static_cast<int>(shape[2]);
+        transposed = true;
+    }
+    else
+    {
+        boxes = static_cast<int>(shape[1]);
+        channels = static_cast<int>(shape[2]);
+    }
+
+    std::vector<cv::Rect> rects;
+    std::vector<float> scores;
+    std::vector<int> classIds;
+
+    for (int i = 0; i < boxes; ++i)
+    {
+        // 取一个候选框中分数最高的类别。
+        // YOLOv8 导出的 ONNX 通常已经没有 objectness 维度，
+        // 所以类别分数就是最终置信度。
+        auto valueAt = [&](int c) {
+            return transposed ? data[c * boxes + i] : data[i * channels + c];
+        };
+
+        const float cx = valueAt(0);
+        const float cy = valueAt(1);
+        const float w = valueAt(2);
+        const float h = valueAt(3);
+
+        int bestClass = -1;
+        float bestScore = 0.0f;
+        for (int c = 0; c < static_cast<int>(kClassNames.size()); ++c)
+        {
+            float s = valueAt(4 + c);
+            if (s > bestScore)
+            {
+                bestScore = s;
+                bestClass = c;
+            }
+        }
+        if (bestScore < config_.confThreshold) continue;
+
+        // 模型输出是 letterbox 图上的 cx/cy/w/h。
+        // 先转成 x1/y1/x2/y2，再减掉灰边，最后除以缩放比例。
+        float x1 = (cx - w * 0.5f - info.padX) / info.scale;
+        float y1 = (cy - h * 0.5f - info.padY) / info.scale;
+        float x2 = (cx + w * 0.5f - info.padX) / info.scale;
+        float y2 = (cy + h * 0.5f - info.padY) / info.scale;
+        x1 = std::clamp(x1, 0.0f, static_cast<float>(imageSize.width - 1));
+        y1 = std::clamp(y1, 0.0f, static_cast<float>(imageSize.height - 1));
+        x2 = std::clamp(x2, 0.0f, static_cast<float>(imageSize.width - 1));
+        y2 = std::clamp(y2, 0.0f, static_cast<float>(imageSize.height - 1));
+
+        cv::Rect r(cv::Point(static_cast<int>(x1), static_cast<int>(y1)),
+                   cv::Point(static_cast<int>(x2), static_cast<int>(y2)));
+        if (r.area() <= 0) continue;
+
+        rects.push_back(r);
+        scores.push_back(bestScore);
+        classIds.push_back(bestClass);
+    }
+
+    std::vector<int> order(rects.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](int a, int b) { return scores[a] > scores[b]; });
+
+    // 按置信度从高到低做 NMS，去掉同类别重复框。
+    //
+    // nmsThreshold 越小，去重越严格；
+    // 例如 0.20 会比 0.50 更容易删掉重叠框。
+    // 这里按“同类别”做 NMS，避免豆子框把数字框误删。
+    std::vector<int> keep;
+    for (int idx : order)
+    {
+        bool suppressed = false;
+        for (int kept : keep)
+        {
+            if (classIds[idx] == classIds[kept] && iou(rects[idx], rects[kept]) > config_.nmsThreshold)
+            {
+                suppressed = true;
+                break;
+            }
+        }
+        if (!suppressed) keep.push_back(idx);
+    }
+
+    std::vector<Detection> detections;
+    for (int idx : keep)
+    {
+        Detection d;
+        d.classId = classIds[idx];
+        d.score = scores[idx];
+        d.box = rects[idx];
+        d.label = kClassNames[d.classId];
+        if (isBeanClass(d.classId))
+        {
+            d.kind = TargetKind::Bean;
+            d.bean = classIdToBean(d.classId);
+        }
+        else if (isDigitClass(d.classId))
+        {
+            d.kind = TargetKind::DigitBox;
+            d.digit = classIdToDigit(d.classId);
+        }
+        detections.push_back(d);
+    }
+    return detections;
+}

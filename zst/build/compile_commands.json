@@ -1,0 +1,57 @@
+[
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/src/CameraDriver/MindVisionCamera.cpp.o -c /home/zst/zst/src/CameraDriver/MindVisionCamera.cpp",
+  "file": "/home/zst/zst/src/CameraDriver/MindVisionCamera.cpp"
+},
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/src/Communication/ByteConverter.cpp.o -c /home/zst/zst/src/Communication/ByteConverter.cpp",
+  "file": "/home/zst/zst/src/Communication/ByteConverter.cpp"
+},
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/src/Communication/CRC16.cpp.o -c /home/zst/zst/src/Communication/CRC16.cpp",
+  "file": "/home/zst/zst/src/Communication/CRC16.cpp"
+},
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/src/Communication/VirtualSerial.cpp.o -c /home/zst/zst/src/Communication/VirtualSerial.cpp",
+  "file": "/home/zst/zst/src/Communication/VirtualSerial.cpp"
+},
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/src/ImgProcessing/BeanSvmClassifier.cpp.o -c /home/zst/zst/src/ImgProcessing/BeanSvmClassifier.cpp",
+  "file": "/home/zst/zst/src/ImgProcessing/BeanSvmClassifier.cpp"
+},
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/src/ImgProcessing/TaskPlanner.cpp.o -c /home/zst/zst/src/ImgProcessing/TaskPlanner.cpp",
+  "file": "/home/zst/zst/src/ImgProcessing/TaskPlanner.cpp"
+},
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/src/ImgProcessing/VisionTypes.cpp.o -c /home/zst/zst/src/ImgProcessing/VisionTypes.cpp",
+  "file": "/home/zst/zst/src/ImgProcessing/VisionTypes.cpp"
+},
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/src/ImgProcessing/VisionSystem.cpp.o -c /home/zst/zst/src/ImgProcessing/VisionSystem.cpp",
+  "file": "/home/zst/zst/src/ImgProcessing/VisionSystem.cpp"
+},
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/src/ImgProcessing/YoloOrtDetector.cpp.o -c /home/zst/zst/src/ImgProcessing/YoloOrtDetector.cpp",
+  "file": "/home/zst/zst/src/ImgProcessing/YoloOrtDetector.cpp"
+},
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/src/Tool/Utils.cpp.o -c /home/zst/zst/src/Tool/Utils.cpp",
+  "file": "/home/zst/zst/src/Tool/Utils.cpp"
+},
+{
+  "directory": "/home/zst/zst/build",
+  "command": "/usr/bin/c++  -I/home/zst/onnxruntime/include -I/home/zst/linuxSDK/include -isystem /usr/local/include/opencv4 -Wall -Wextra -Wpedantic -std=c++17 -o CMakeFiles/logistics_vision.dir/main.cpp.o -c /home/zst/zst/main.cpp",
+  "file": "/home/zst/zst/main.cpp"
+}
+]
