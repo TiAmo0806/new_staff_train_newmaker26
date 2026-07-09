@@ -1,0 +1,27 @@
+runtime:
+  mode: "camera_preview_demo"
+
+input:
+  type: "mindvision_camera"
+  source: ""
+  camera_id: 0
+
+camera:
+  camera_id: 0
+  width: 1280
+  height: 720
+  fps: 30
+  exposure: 8000
+  gain: 4
+  auto_exposure: false
+
+roi:
+  file: "config/roi.yaml"
+
+debug:
+  show_window: true
+  draw_result: true
+  save_raw_frame: false
+  save_result_image: false
+  show_mouse_position: true
+  output_dir: "debug_output/camera_preview"

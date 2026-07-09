@@ -1,0 +1,50 @@
+runtime:
+  mode: "debug_image_real_serial"
+
+input:
+  type: "image"
+  source: "data/test.jpg"
+  camera_id: 0
+
+camera:
+  camera_id: 0
+  width: 1280
+  height: 720
+  fps: 30
+  exposure: 8000
+  gain: 4
+  auto_exposure: false
+
+command:
+  source: "terminal"
+
+detector:
+  backend: "onnxruntime"
+  model_path: "../bisai/bean_digit_v1_verified_20260624/best.onnx"
+  conf_threshold: 0.25
+  nms_threshold: 0.45
+  class_file: "config/classes.yaml"
+
+roi:
+  file: "config/roi.yaml"
+
+serial:
+  mock: false
+  port: "/dev/ttyACM0"
+  baudrate: 115200
+  ack_timeout_ms: 100
+  max_resend: 3
+
+debug:
+  show_window: false
+  draw_result: true
+  print_detections: true
+  print_roi_result: true
+  print_state: true
+  print_packet_hex: true
+  print_tx_hex: true
+  print_rx_hex: true
+  print_parsed_packet: true
+  save_raw_frame: false
+  save_result_image: false
+  output_dir: "debug_output"

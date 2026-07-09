@@ -1,0 +1,6 @@
+enable: false
+mock: true
+port: "/dev/ttyACM0"
+baudrate: 115200
+ack_timeout_ms: 100
+max_resend: 3

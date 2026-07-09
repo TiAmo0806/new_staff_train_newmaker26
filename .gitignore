@@ -1,0 +1,68 @@
+# ======================
+# Build files
+# ======================
+
+build/
+**/build/
+build_mingw/
+**/build/
+
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+
+# ======================
+# Third party SDK
+# ======================
+
+linuxSDK*/
+**/linuxSDK*/
+third_party/
+
+
+# ======================
+# ONNX Runtime
+# ======================
+
+onnxruntime*/
+**/onnxruntime*/
+*.tgz
+
+
+# ======================
+# Model files
+# ======================
+
+*.onnx
+*.onnx.data
+*.pt
+
+
+# ======================
+# Dataset / output
+# ======================
+
+dataset/
+frames/
+output/
+output_verified/
+debug_output/
+
+
+# ======================
+# Cache
+# ======================
+
+.cache/
+cache/
+.vscode/
+.idea/
+
+
+# ======================
+# Logs
+# ======================
+
+*.log

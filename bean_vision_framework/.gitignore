@@ -1,0 +1,47 @@
+# Build directories
+/build/
+/build_*/
+/cmake-build-*/
+
+# CMake/Ninja generated files
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+build.ninja
+.ninja_deps
+.ninja_log
+
+# Binaries and libraries
+*.exe
+*.out
+*.app
+*.dll
+*.so
+*.so.*
+*.a
+*.lib
+*.obj
+*.o
+
+# Ignore vendored ONNX Runtime under bisai/
+/bisai/onnxruntime-linux-x64-1.27.0/
+/bisai/onnxruntime-linux-x64-1.27 (1).0/
+/bisai/onnxruntime-sdk
+
+# Runtime outputs
+/debug_output/
+*.log
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Historical Windows build residue
+/build_mingw/

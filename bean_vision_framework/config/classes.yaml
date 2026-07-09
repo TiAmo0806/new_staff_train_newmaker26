@@ -1,0 +1,16 @@
+names:
+  0: soybean
+  1: mung_bean
+  2: white_kidney_bean
+  3: digit_1
+  4: digit_2
+  5: digit_3
+  6: digit_4
+  7: digit_5
+
+aliases:
+  data_1: digit_1
+  data_2: digit_2
+  data_3: digit_3
+  data_4: digit_4
+  data_5: digit_5

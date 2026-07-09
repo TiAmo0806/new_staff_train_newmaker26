@@ -1,0 +1,58 @@
+runtime:
+  mode: "real_robot"
+
+input:
+  type: "mindvision_camera"
+  source: ""
+  camera_id: 0
+
+camera:
+  camera_id: 0
+  width: 1280
+  height: 720
+  fps: 30
+  exposure: 8000
+  gain: 4
+  auto_exposure: false
+
+command:
+  source: "serial"
+
+scan:
+  frames_per_scan: 5
+  min_vote_count: 3
+  min_avg_confidence: 0.6
+  max_retry: 3
+  stable_delay_ms: 100
+
+detector:
+  backend: "onnxruntime"
+  model_path: "../bisai/bean_digit_v1_verified_20260624/best.onnx"
+  conf_threshold: 0.25
+  nms_threshold: 0.45
+  class_file: "config/classes.yaml"
+
+roi:
+  file: "config/roi.yaml"
+
+serial:
+  mock: false
+  port: "/dev/ttyACM0"
+  baudrate: 115200
+  ack_timeout_ms: 100
+  max_resend: 3
+
+debug:
+  show_window: false
+  draw_result: false
+  print_detections: false
+  print_roi_result: false
+  print_vote_result: false
+  print_state: false
+  print_packet_hex: false
+  print_tx_hex: false
+  print_rx_hex: false
+  print_parsed_packet: false
+  save_raw_frame: false
+  save_result_image: false
+  output_dir: "debug_output"

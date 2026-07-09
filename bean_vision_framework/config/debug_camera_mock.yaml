@@ -1,0 +1,58 @@
+runtime:
+  mode: "debug_camera_mock"
+
+input:
+  type: "mindvision_camera"
+  source: ""
+  camera_id: 0
+
+camera:
+  camera_id: 0
+  width: 1280
+  height: 720
+  fps: 30
+  exposure: 8000
+  gain: 4
+  auto_exposure: false
+
+command:
+  source: "terminal"
+
+scan:
+  frames_per_scan: 5
+  min_vote_count: 3
+  min_avg_confidence: 0.6
+  max_retry: 3
+  stable_delay_ms: 100
+
+detector:
+  backend: "onnxruntime"
+  model_path: "../bisai/bean_digit_v1_verified_20260624/best.onnx"
+  conf_threshold: 0.25
+  nms_threshold: 0.45
+  class_file: "config/classes.yaml"
+
+roi:
+  file: "config/roi.yaml"
+
+serial:
+  mock: true
+  port: "/dev/ttyACM0"
+  baudrate: 115200
+  ack_timeout_ms: 0
+  max_resend: 0
+
+debug:
+  show_window: true
+  draw_result: true
+  print_detections: true
+  print_roi_result: true
+  print_vote_result: true
+  print_state: true
+  print_packet_hex: true
+  print_tx_hex: true
+  print_rx_hex: false
+  print_parsed_packet: false
+  save_raw_frame: true
+  save_result_image: true
+  output_dir: "debug_output"
