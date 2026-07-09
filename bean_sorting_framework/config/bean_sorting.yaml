@@ -1,0 +1,27 @@
+# 豆类分拣系统配置 — 对标飞镖 config/debug.yaml
+
+  camera:
+    config: "config/mv_camera.yaml"   # MvCamera 子配置
+    exposure: 5000
+    gain: 10
+
+  model:
+    path: "models/bean_detect.onnx"
+    conf_threshold: 0.7
+    nms_threshold: 0.45
+    input_width: 640
+    input_height: 640
+
+  serial:
+    port: "/dev/ttyACM0"
+    tx_log: false
+    watchdog: false
+
+  gui:
+    show: true
+    display_scale: 1.0
+
+  box_mapping:
+    soybean: 1       # 黄豆 → 1号箱
+    mung_bean: 2     # 绿豆 → 2号箱
+    kidney_bean: 3   # 白芸豆 → 3号箱
