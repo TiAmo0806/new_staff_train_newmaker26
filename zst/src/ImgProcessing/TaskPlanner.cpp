@@ -29,7 +29,8 @@ VisionDecision TaskPlanner::update(const std::vector<Detection> &detections, con
     Detection bean = chooseBestBean(detections);
     if (bean.bean == BeanType::Unknown)
     {
-        decision.reason = "未识别到豆子";
+        // OpenCV 默认 putText 不支持中文，调试画面用 ASCII 状态码显示。
+        decision.reason = "no_bean";
         stableCount_ = 0;
         return decision;
     }
@@ -44,7 +45,8 @@ VisionDecision TaskPlanner::update(const std::vector<Detection> &detections, con
     Detection box = chooseTargetBox(detections, targetDigit);
     if (box.digit == 0)
     {
-        decision.reason = "未找到目标数字箱";
+        // OpenCV 默认 putText 不支持中文，调试画面用 ASCII 状态码显示。
+        decision.reason = "no_target_box";
         stableCount_ = 0;
         return decision;
     }
@@ -71,6 +73,7 @@ VisionDecision TaskPlanner::update(const std::vector<Detection> &detections, con
     decision.targetCenter = cv::Point2f(box.box.x + box.box.width * 0.5f,
                                         box.box.y + box.box.height * 0.5f);
     decision.yawErrorPixel = decision.targetCenter.x - imageSize.width * 0.5f;
-    decision.reason = decision.valid ? "目标稳定" : "等待稳定";
+    // OpenCV 默认 putText 不支持中文，调试画面用 ASCII 状态码显示。
+    decision.reason = decision.valid ? "target_stable" : "wait_stable";
     return decision;
 }

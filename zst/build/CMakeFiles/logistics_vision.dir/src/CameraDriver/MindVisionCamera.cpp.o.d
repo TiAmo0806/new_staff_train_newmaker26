@@ -1,9 +1,10 @@
 CMakeFiles/logistics_vision.dir/src/CameraDriver/MindVisionCamera.cpp.o: \
  /home/zst/zst/src/CameraDriver/MindVisionCamera.cpp \
- /usr/include/stdc-predef.h /home/zst/linuxSDK/include/CameraApi.h \
+ /usr/include/stdc-predef.h \
+ /home/zst/zst/include/CameraDriver/MindVisionCamera.h \
+ /home/zst/linuxSDK/include/CameraApi.h \
  /home/zst/linuxSDK/include/CameraDefine.h \
  /home/zst/linuxSDK/include/CameraStatus.h \
- /home/zst/zst/include/CameraDriver/MindVisionCamera.h \
  /usr/local/include/opencv4/opencv2/opencv.hpp \
  /usr/local/include/opencv4/opencv2/opencv_modules.hpp \
  /usr/local/include/opencv4/opencv2/core.hpp \

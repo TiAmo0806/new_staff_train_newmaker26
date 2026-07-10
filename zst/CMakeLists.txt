@@ -102,7 +102,9 @@ set(ALL_SOURCES
     src/Communication/ByteConverter.cpp
     src/Communication/CRC16.cpp
     src/Communication/VirtualSerial.cpp
+    src/Communication/VisionProtocol.cpp
     src/ImgProcessing/BeanSvmClassifier.cpp
+    src/ImgProcessing/FieldStateCollector.cpp
     src/ImgProcessing/TaskPlanner.cpp
     src/ImgProcessing/VisionTypes.cpp
     src/ImgProcessing/VisionSystem.cpp
@@ -120,6 +122,7 @@ add_executable(logistics_vision ${ALL_SOURCES})
 #   #include "/home/zst/zst/include/ImgProcessing/VisionSystem.h"
 #   #include "/home/zst/zst/include/CameraDriver/MindVisionCamera.h"
 target_include_directories(logistics_vision PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${OpenCV_INCLUDE_DIRS}
     ${ONNXRUNTIME_INCLUDE_DIR}
     ${MINDVISION_INCLUDE_DIR}

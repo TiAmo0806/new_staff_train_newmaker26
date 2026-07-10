@@ -14,11 +14,11 @@ const std::vector<std::string> kClassNames = {
     "data_1", "data_2", "data_3", "data_4", "data_5"};
 
 float iou(const cv::Rect &a, const cv::Rect &b)
-{
+ {
     const int inter = (a & b).area();
     const int uni = a.area() + b.area() - inter;
     return uni > 0 ? static_cast<float>(inter) / uni : 0.0f;
-}
+ }
 }
 
 YoloOrtDetector::YoloOrtDetector(const YoloConfig &config)

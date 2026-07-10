@@ -8,11 +8,14 @@
  */
 
 #include "/home/zst/zst/include/CameraDriver/MindVisionCamera.h"
+#include "Communication/VisionProtocol.h"
+#include "ImgProcessing/FieldStateCollector.h"
 #include "/home/zst/zst/include/Communication/VirtualSerial.h"
 #include "/home/zst/zst/include/ImgProcessing/VisionSystem.h"
 #include "/home/zst/zst/include/Tool/Utils.h"
 #include <iostream>
 #include <opencv2/highgui.hpp>
+#include <opencv2/videoio.hpp>
 #include <string>
 
 int main(int argc, char **argv)
@@ -59,6 +62,17 @@ int main(int argc, char **argv)
         std::cerr << "[Main] 串口打开失败，切换模拟发送" << std::endl;
     }
 
+    // 多角度识别收集器：
+    // 1) 每个角度连续统计 20 帧，避免单帧误识别直接保存。
+    // 2) 当前角度内部按画面从左到右排序。
+    // 3) 已经保存过的豆子/数字会跳过，不会重复占用下一个位置。
+    // 4) 先收集 3 个豆子位置，再收集 5 个数字箱位置，完成后一次性发给电控。
+    FieldStateCollectorConfig collectorConfig;
+    collectorConfig.voteFramesPerAngle = 20;
+    collectorConfig.minHitsPerAngle = 6;
+    FieldStateCollector collector(collectorConfig);
+    bool fieldStateSent = false;
+
     cv::VideoWriter writer;
     const std::string windowName = "Logistics Vision";
     if (config.showWindow) cv::namedWindow(windowName, cv::WINDOW_NORMAL);
@@ -81,17 +95,38 @@ int main(int argc, char **argv)
         // result.debugImage：画好框和文字的调试图。
         VisionFrameResult result = vision.process(frame);
 
-        // 6. 串口发送。
-        // 电控协议未定：这里先发送空 payload，占住通信流程。
-        // 后续协议确定后，在这里把 result.decision 转成电控需要的字节。
-        //
-        // 例如以后可能会发：
-        //   是否识别到目标
-        //   目标箱编号 1/2/3
-        //   目标中心相对图像中心的偏差
-        //   当前工作状态
-        VisionTxPacket tx;
-        serial.sendPacket(tx);
+        // 6. 多角度收集并在完成后一次性发送。
+        // 豆子阶段：两个角度都可以连续扫，收集器会跳过重复豆子。
+        // 箱子阶段：三个角度都可以连续扫，收集器会跳过重复数字。
+        // 完整 payload：
+        //   valid bean1 bean2 bean3 boxA boxB boxC boxD boxE
+        if (!collector.beanReady())
+        {
+            AngleCommitResult commit = collector.addBeanFrame(result.detections);
+            if (commit.committed)
+            {
+                std::cout << "[Main] 豆子角度投票完成，新增 "
+                          << commit.addedCount << " 个，当前 "
+                          << collector.beanCount() << "/3" << std::endl;
+            }
+        }
+        else if (!collector.boxReady())
+        {
+            AngleCommitResult commit = collector.addBoxFrame(result.detections);
+            if (commit.committed)
+            {
+                std::cout << "[Main] 数字箱角度投票完成，新增 "
+                          << commit.addedCount << " 个，当前 "
+                          << collector.boxCount() << "/5" << std::endl;
+            }
+        }
+        else if (!fieldStateSent)
+        {
+            VisionTxPacket tx = buildFieldStatePacket(collector.state());
+            serial.sendPacket(tx);
+            fieldStateSent = true;
+            std::cout << "[Main] 完整场地状态已发送给电控" << std::endl;
+        }
 
         // 7. 调试窗口显示。
         // 按 ESC / q 退出程序。
