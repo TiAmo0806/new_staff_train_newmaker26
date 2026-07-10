@@ -67,9 +67,15 @@ message(STATUS "[MV_SDK]  root: ${MV_SDK_ROOT}")
 message(STATUS "[MV_SDK]  lib:  ${MV_LIB_DIR}")
 
 # ============================================================
-# 可执行文件
+# 可执行文件（各模块的 .cpp 源文件）
 # ============================================================
-add_executable(${PROJECT_NAME} src/main.cpp)
+add_executable(${PROJECT_NAME}
+    main.cpp
+    src/camera.cpp
+    src/detector.cpp
+    src/preprocess.cpp
+    src/visualize.cpp
+)
 
 # ============================================================
 # 链接库

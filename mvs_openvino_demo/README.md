@@ -13,9 +13,11 @@
 ## 目录
 
 - [项目结构](#项目结构)
+- [模块架构说明](#模块架构说明)
 - [依赖与安装](#依赖与安装)
 - [快速开始](#快速开始)
 - [main.cpp 逐行详解](#maincpp-逐行详解)
+- [各模块源码详解](#各模块源码详解)
 - [CMakeLists.txt 详解](#cmakeliststxt-详解)
 - [build.sh 一键编译脚本详解](#buildsh-一键编译脚本详解)
 - [对话中踩过的坑与解决方案](#对话中踩过的坑与解决方案)
@@ -28,13 +30,187 @@
 ```
 mvs_openvino_demo/
 ├── src/
-│   └── main.cpp           # 主程序源代码
-├── CMakeLists.txt          # CMake 编译配置
-├── build.sh                # 一键编译脚本
-├── build/                  # 编译输出目录（自动生成）
-│   ├── openvino_links/     # OpenVINO .so 符号链接（自动生成）
-│   └── mvs_openvino_demo   # 编译产物（可执行文件）
-└── README.md               # 本文件
+│   ├── main.cpp             # 主入口 — 只负责串联调用，~70 行
+│   ├── camera.hpp / camera.cpp         # 相机模块
+│   ├── preprocess.hpp / preprocess.cpp # 预处理模块
+│   ├── detector.hpp / detector.cpp     # 推理模块
+│   └── visualize.hpp / visualize.cpp   # 绘制模块
+├── CMakeLists.txt            # CMake 编译配置
+├── build.sh                  # 一键编译脚本
+├── build/                    # 编译输出目录（自动生成）
+│   ├── openvino_links/       # OpenVINO .so 符号链接（自动生成）
+│   └── mvs_openvino_demo     # 编译产物（可执行文件）
+└── README.md                 # 本文件
+```
+
+---
+
+## 模块架构说明
+
+代码按功能拆分为 **4 个独立模块 + 1 个主入口**，遵循"单一职责原则"。
+
+```
+┌──────────────────────────────────────────────────┐
+│  main.cpp（主入口 / 调度者）                       │
+│                                                    │
+│  1. 创建 Camera、Detector 对象                    │
+│  2. 循环：取帧 → 推理 → 绘制 → 显示               │
+│  3. 管理 FPS 统计和按键退出                       │
+└────┬──────────┬──────────┬───────────────────────┘
+     │          │          │
+     ▼          ▼          ▼
+┌─────────┐ ┌──────────┐ ┌─────────────┐
+│ Camera  │ │ Detector │ │ visualize   │
+│ 相机模块 │ │ 推理模块  │ │ 绘制模块     │
+└────┬────┘ └────┬─────┘ └─────────────┘
+     │           │
+     ▼           ▼
+  camera      ┌──────────┐
+   SDK        │preprocess│
+              │ 预处理    │
+              └──────────┘
+```
+
+### 各模块职责一览
+
+| 模块 | 文件 | 负责 | 对外接口 |
+|------|------|------|---------|
+| **Camera** | `camera.hpp/cpp` | 相机枚举、初始化、取帧、释放 | `open()`, `read()`, `release()`, `width()`, `height()`, `isMono()` |
+| **preprocess** | `preprocess.hpp/cpp` | BGR→RGB、Resize、归一化、HWC→CHW | `preprocess(frame)`, `blob_to_tensor(blob)` |
+| **Detector** | `detector.hpp/cpp` | 模型加载、推理、后处理、NMS | `load(path)`, `detect(frame)`, `printModelInfo()` |
+| **visualize** | `visualize.hpp/cpp` | 画检测框、类别标签、置信度 | `drawDetections(frame, detections)`, `getClassColors()` |
+
+### Camera 模块详解
+
+**职责**：封装迈德威视 SDK 的所有底层操作，对外只暴露 3 个核心方法。
+
+```cpp
+// 打开相机（内部完成枚举→初始化→配置→启动流）
+Camera cam;
+cam.open();
+
+// 循环取帧（内部完成取图→图像处理→零拷贝→释放缓存）
+cv::Mat frame;
+while (cam.read(frame)) {
+    // frame 就是可直接使用的 BGR Mat
+}
+
+// 关闭释放
+cam.release();
+```
+
+**封装细节**（调用方无需关心）：
+- `CameraSdkInit(1)` — SDK 全局初始化
+- `CameraEnumerateDevice()` — 枚举设备
+- `CameraInit()` — 打开指定相机
+- `CameraGetCapability()` — 读取最大分辨率
+- `CameraSetIspOutFormat()` — 黑白/彩色自动适配
+- `CameraPlay()` — 启动数据流
+- `CameraImageProcess()` — Bayer→BGR
+- `CameraReleaseImageBuffer()` — 释放帧缓存（⚠️ 忘记调用会卡死）
+- `CameraUnInit()` — 关闭相机
+
+**设计要点**：
+- 用 `cv::Mat` 预分配最大分辨率缓存，取帧时零拷贝构造 Mat 视图
+- 析构函数自动调用 `release()`，即使异常退出也不会泄漏资源（RAII）
+- 提供 `isMono()` 接口，调用方可判断是否需要 `cvtColor(GRAY2BGR)`
+
+### preprocess 模块详解
+
+**职责**：将相机原始 BGR 图像转换为模型可接受的 NCHW float32 Tensor。
+
+```cpp
+// 步骤1：图像预处理（仍为 HWC 布局）
+cv::Mat blob = preprocess(frame);
+//    内部：BGR→RGB → Resize(640×640) → uint8→float32 → [0,1] 归一化
+
+// 步骤2：布局转换 + 封装 Tensor
+ov::Tensor tensor = blob_to_tensor(blob);
+//    内部：HWC→CHW 手动搬运 → 构造 ov::Tensor(shape=[1,3,640,640])
+```
+
+**处理流水线**：
+```
+原始帧 (BGR, uint8, W×H×3)
+  → cvtColor: BGR → RGB
+  → resize: W×H → 640×640
+  → convertTo: uint8[0,255] → float32[0,1]
+  → HWC→CHW: 三层循环手动搬运
+  → ov::Tensor: [1, 3, 640, 640]
+```
+
+### Detector 模块详解
+
+**职责**：管理 OpenVINO 模型生命周期，提供"输入图像 → 检测结果"的一站式接口。
+
+```cpp
+Detector detector;
+
+// 可调参数（有默认值，可按需修改）
+detector.confThreshold = 0.4f;   // 置信度阈值
+detector.nmsThreshold  = 0.5f;   // NMS IoU 阈值
+detector.inputWidth    = 640;    // 模型输入尺寸
+detector.inputHeight   = 640;
+
+// 加载模型（自动完成：读取IR→编译→创建推理请求→打印模型信息）
+detector.load("best.xml", "AUTO");  // "AUTO"=自动选CPU/GPU
+
+// 一行推理
+auto results = detector.detect(frame);
+```
+
+**`detect()` 内部流程**：
+```
+1. preprocess(frame)        → blob (HWC, float32, 640×640×3)
+2. blob_to_tensor(blob)     → ov::Tensor (NCHW, [1,3,640,640])
+3. infer_request.infer()    → 模型推理
+4. postprocess(output, ...) → 解析 [1,12,8400] → 置信度筛选 → NMS
+5. 返回 std::vector<Detection>
+```
+
+**`load()` 内部流程**：
+```
+1. core.read_model(xml)              → 解析 .xml+.bin
+2. core.compile_model(model, device) → 优化编译到 CPU/GPU
+3. compiled_model.create_infer_request() → 创建可复用的推理请求
+4. printModelInfo()                  → 打印输入输出形状
+```
+
+### visualize 模块详解
+
+**职责**：在图像上原地绘制检测结果，不关检测逻辑。
+
+```cpp
+drawDetections(display, detections);
+```
+
+**绘制内容**（每检测框）：
+1. 彩色矩形框（颜色按类别区分，线宽 2px）
+2. 标签背景（实心矩形，与框同色）
+3. 标签文字（白色，格式 `"类别名 0.87"`）
+
+**依赖关系**：visualize 只依赖 `Detection` 结构体（定义在 `detector.hpp` 中），不依赖任何 OpenVINO API。
+
+### main.cpp 主入口
+
+**职责**：只做"创建对象 → 串联调用 → 管理生命周期"，不含任何算法细节。
+
+```cpp
+int main() {
+    // 1. 创建 + 初始化
+    Camera cam;    cam.open();
+    Detector det;  det.load("best.xml");
+
+    // 2. 主循环
+    while (cam.read(frame)) {
+        auto results = det.detect(frame);     // 推理（一行）
+        drawDetections(display, results);      // 绘制（一行）
+        imshow("...", display);                // 显示（一行）
+        if (waitKey(1) == 27) break;           // ESC 退出
+    }
+
+    // 3. 自动清理（析构函数）
+}
 ```
 
 ---
