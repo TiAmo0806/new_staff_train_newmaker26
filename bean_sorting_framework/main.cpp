@@ -49,7 +49,7 @@
 
       void reset() { buf_.clear(); }
 
-  private:
+  private:                                                
       std::vector<uint8_t> buf_;
   };
 
@@ -75,7 +75,7 @@
       bool show_tx = false;
       bool watchdog = false;
       float conf_thresh  = 0.66f;    
-      float nms_thresh   = 0.05f;    // 之前默认 0.3，调低减少重叠框
+      float nms_thresh   = 0.05f;  
 
       if (argc >= 2) serial_port = argv[1];
 

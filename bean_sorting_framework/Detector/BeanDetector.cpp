@@ -2,9 +2,10 @@
   #include <iostream>
   #include <algorithm>
   #include <cmath>
+  #include <chrono>
 
   // ===================================================================
-  //  DetectorPreprocessor预处理
+  //  DetectorPreprocessor
   // ===================================================================
 
   cv::Mat DetectorPreprocessor::run(const cv::Mat& src) {
@@ -36,23 +37,21 @@
                                 int imgW, int imgH) {
       std::vector<Detection> rs;
       int NC = N - 4;
-     //多尺度检测头
-      int gw0 = inputW_ / 8,  gh0 = inputH_ / 8;//8倍下采样
+
+      int gw0 = inputW_ / 8,  gh0 = inputH_ / 8;
       int gw1 = inputW_ / 16, gh1 = inputH_ / 16;
       int gw2 = inputW_ / 32, gh2 = inputH_ / 32;
       int cnt0 = gw0 * gh0, cnt1 = gw1 * gh1, cnt2 = gw2 * gh2;
-      int ST[3] = {8, 16, 32};//步长，小步长检测小物体
+      int ST[3] = {8, 16, 32};
       int GW[3] = {gw0, gw1, gw2};
-      int OFF[4] = {0, cnt0, cnt0 + cnt1, cnt0 + cnt1 + cnt2};// 偏移索引
+      int OFF[4] = {0, cnt0, cnt0 + cnt1, cnt0 + cnt1 + cnt2};
 
       float thr = confThr_;
       std::vector<float>    sc;
       std::vector<int>      ci;
       std::vector<cv::Rect> bx;
-      std::vector<float>    dbg_w, dbg_h;
 
       for (int x = 0; x < D; ++x) {
-          // 类别: 通道 4 ~ N-1
           float bs = 0.0f; int bc = -1;
           for (int c = 0; c < NC; ++c) {
               float s = sigmoid(dd[(4 + c) * D + x]);
@@ -60,13 +59,11 @@
           }
           if (bs < thr) continue;
 
-          //YOLO坐标解码
-          float cx = dd[0 * D + x];  // 模型空间的 center_x
-          float cy = dd[1 * D + x];  // 模型空间的 center_y
-          float w  = dd[2 * D + x];  // 模型空间的 width
-          float h_ = dd[3 * D + x];  // 模型空间的 height
+          float cx = dd[0 * D + x];
+          float cy = dd[1 * D + x];
+          float w  = dd[2 * D + x];
+          float h_ = dd[3 * D + x];
 
-          // 映射回原图: (model_pixel - pad) * invScale
           float x1 = (cx - w  / 2.0f - padX) * invScale;
           float y1 = (cy - h_ / 2.0f - padY) * invScale;
           float x2 = (cx + w  / 2.0f - padX) * invScale;
@@ -81,35 +78,15 @@
 
           sc.push_back(bs); ci.push_back(bc);
           bx.push_back(cv::Rect(L, T, W, H));
-          dbg_w.push_back(w * invScale); dbg_h.push_back(h_ * invScale);
-      }
-
-      static int fc = 0; ++fc;
-      if (fc % 10 == 1 && !bx.empty()) {
-          float min_w = dbg_w[0], max_w = dbg_w[0];
-          float min_h = dbg_h[0], max_h = dbg_h[0];
-          for (size_t i = 0; i < dbg_w.size(); ++i) {
-              if (dbg_w[i] < min_w) min_w = dbg_w[i];
-              if (dbg_w[i] > max_w) max_w = dbg_w[i];
-              if (dbg_h[i] < min_h) min_h = dbg_h[i];
-              if (dbg_h[i] > max_h) max_h = dbg_h[i];
-          }
-          std::cout << "[BD] f" << fc
-                    << " cand=" << bx.size()
-                    << " w=[" << (int)min_w << "-" << (int)max_w << "]"
-                    << " h=[" << (int)min_h << "-" << (int)max_h << "]"
-                    << " thr=" << thr << std::endl;
       }
 
       if (bx.empty()) return rs;
 
       std::vector<int> ndx;
-      //按类分别做NMS
       std::vector<std::vector<int> > cls_idx(NC);
       for (int i = 0; i < (int)sc.size(); ++i) {
           int c = ci[i]; if (c >= 0 && c < NC) cls_idx[c].push_back(i);
-      }//按类别分组
-      //每个类别单独做NMS  不同类别物体可以交疊，同类别不可以交疊
+      }
       for (int c = 0; c < NC; ++c) {
           if (cls_idx[c].empty()) continue;
           std::vector<cv::Rect> cbx; std::vector<float> csc;
@@ -250,14 +227,10 @@
           for (auto& d : sh) if (d < 0) d = 1;
           Ort::MemoryInfo mi = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
           int64_t total = 1; for (auto d : sh) total *= d;
-          //模型推理
           Ort::Value it = Ort::Value::CreateTensor<float>(mi, (float*)blob.ptr<float>(), total, sh.data(), sh.size());
-          //CreateTensor	将cv::Mat转为ONNX Tensor
           auto ot = session_->Run(Ort::RunOptions{nullptr}, input_names_.data(), &it, 1,
-            //session_->Run	执行推理
-          output_names_.data(), output_names_.size());
+                                  output_names_.data(), output_names_.size());
           float* dd = ot[0].GetTensorMutableData<float>();
-          //GetTensorMutableData	获取输出数据指针
           rs = postproc_.decode(dd, (int)output_shapes_[0][2], (int)output_shapes_[0][1],
                                 1.0f / preproc_.scale(), preproc_.padX(), preproc_.padY(),
                                 img.cols, img.rows);
@@ -266,6 +239,53 @@
   }
 
   cv::Mat& BeanDetector::drawResults(cv::Mat& img, const std::vector<Detection>& rs) {
+      // ====== 1 秒一次，只打印最靠近画面中心的物体 ======
+      static auto last_print = std::chrono::steady_clock::now();
+      auto now = std::chrono::steady_clock::now();
+      double elapsed = std::chrono::duration<double>(now - last_print).count();
+
+      if (elapsed >= 1.0) {
+          last_print = now;
+          if (rs.empty()) {
+              std::cout << "[TX] (无检测)" << std::endl;
+          } else {
+              // 找离画面中心最近的目标
+              float cx = img.cols * 0.5f;
+              float cy = img.rows * 0.5f;
+              int best = 0;
+              float best_dist = std::pow(rs[0].center.x - cx, 2) + std::pow(rs[0].center.y - cy, 2);
+              for (size_t i = 1; i < rs.size(); ++i) {
+                  float d = std::pow(rs[i].center.x - cx, 2) + std::pow(rs[i].center.y - cy, 2);
+                  if (d < best_dist) { best_dist = d; best = (int)i; }
+              }
+              const auto& r = rs[best];
+              int id = (int)r.bean_type;
+              if (id < 0 || id > 7) id = 7;
+
+              std::cout << "[TX] 类别=" << id
+                        << " 名称=" << kClassName(id)
+                        << " 置信度=" << (int)(r.confidence * 100.0f) << "%"
+                        << " 箱号=";
+              switch (id) {
+                  case 0: std::cout << "1"; break;
+                  case 1: std::cout << "2"; break;
+                  case 2: std::cout << "3"; break;
+                  case 3: std::cout << "4"; break;
+                  case 4: std::cout << "5"; break;
+                  case 5: std::cout << "6"; break;
+                  case 6: std::cout << "7"; break;
+                  case 7: std::cout << "8"; break;
+                  default: std::cout << "?";
+              }
+              std::cout << " 坐标=(" << (int)r.center.x
+                        << "," << (int)r.center.y << ")"
+                        << " 尺寸=" << r.box.width
+                        << "x" << r.box.height
+                        << " (共检测" << rs.size() << "个)"
+                        << std::endl;
+          }
+      }
+
       visual_.draw(img, rs, confThreshold_, nmsThreshold_, num_classes_);
       return img;
   }
