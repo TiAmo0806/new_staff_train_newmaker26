@@ -1,11 +1,10 @@
 camera:
-  index: 0
-  exposure_us: 8000
-  gain: 8
+  exposure_us: 8000           #曝光时间8ms
+  gain: 8                     #模拟增益
   auto_exposure: true
 
 model:
-  onnx_path: "/home/zst/best.onnx"
+  onnx_path: "/home/zst/zst/best.onnx"
   svm_path: "/home/zst/bean_svm.yml"
   input_width: 640
   input_height: 640
@@ -27,6 +26,6 @@ runtime:
 
 planner:
   # 规则：黄豆->1，绿豆->2，白芸豆->3，4/5 为空箱。
-  min_stable_frames: 3
-  target_center_deadband: 20
+  min_stable_frames: 3       #数字目标连续检测
+
 

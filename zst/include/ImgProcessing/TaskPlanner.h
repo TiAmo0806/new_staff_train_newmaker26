@@ -10,8 +10,6 @@ struct PlannerConfig
     // 目标连续稳定多少帧后才认为可发送给电控。
     int minStableFrames = 3;
 
-    // 中心误差死区，后续转 yaw/pitch 时会用到。
-    float centerDeadband = 20.0f;
 };
 
 class TaskPlanner

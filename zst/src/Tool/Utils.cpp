@@ -33,7 +33,6 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
         if (y["camera"])
         {
             auto c = y["camera"];
-            if (c["index"]) config.camera.index = c["index"].as<int>();
             if (c["exposure_us"]) config.camera.exposureUs = c["exposure_us"].as<int>();
             if (c["gain"]) config.camera.gain = c["gain"].as<int>();
             if (c["auto_exposure"]) config.camera.autoExposure = c["auto_exposure"].as<bool>();
@@ -69,7 +68,6 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
         {
             auto p = y["planner"];
             if (p["min_stable_frames"]) config.vision.planner.minStableFrames = p["min_stable_frames"].as<int>();
-            if (p["target_center_deadband"]) config.vision.planner.centerDeadband = p["target_center_deadband"].as<float>();
         }
         return true;
     }
