@@ -70,7 +70,7 @@ endif()
 #  3. 源文件
 # ============================================================
 set(SOURCES
-    vision.cpp
+    src/vision.cpp
     src/config.cpp
     src/serial.cpp
     src/camera.cpp

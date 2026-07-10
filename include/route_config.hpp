@@ -17,18 +17,14 @@
 
 namespace fs = std::filesystem;
 
-// ============================================================
 //  路径指令结构体
-// ============================================================
 struct PathCommand {
     uint8_t first_cmd = 0;      // 0=直行, 1=左转, 2=右转
     uint8_t second_cmd = 1;     // 1=左分支, 2=中分支, 3=右分支
     uint8_t turn_strength = 30; // 转弯强度 10~80
 };
 
-// ============================================================
 //  工具：安全获取文件修改时间（文件不存在返回零值）
-// ============================================================
 inline fs::file_time_type safeLastWriteTime(const std::string& path)
 {
     std::error_code ec;
@@ -37,10 +33,8 @@ inline fs::file_time_type safeLastWriteTime(const std::string& path)
     return t;
 }
 
-// ============================================================
 //  工具：解析项目内文件路径
 //  从 build/ 执行时自动找 ../  和 ../config/ ../model/
-// ============================================================
 inline std::string resolveProjectPath(const std::string& filename)
 {
     // 候选搜尋順序
@@ -59,9 +53,7 @@ inline std::string resolveProjectPath(const std::string& filename)
     return filename;
 }
 
-// ============================================================
 //  路径配置类（加载 + 查询 + 热重载）
-// ============================================================
 class RouteConfig {
 public:
     /// 从文件加载，失败则使用默认值

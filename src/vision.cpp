@@ -41,7 +41,8 @@ int main()
 
     // 模型（可降级） 
     YOLODetector detector;
-    bool modelOk = detector.loadModel(resolveProjectPath("best.onnx"));
+    bool modelOk = detector.loadModel(resolveProjectPath("best.onnx"),
+                                      cfg.input_width, cfg.input_height);
     if (modelOk) {
         detector.setNmsThreshold(cfg.nms_threshold);
         std::cout << "YOLO 模型已加载" << std::endl;

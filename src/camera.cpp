@@ -1,6 +1,6 @@
-/**
- * camera.cpp —— 迈德威视相机类实现
- */
+/*
+ camera.cpp —— 迈德威视相机类实现
+*/
 
 #include "cemare.hpp"
 #include <cstring>

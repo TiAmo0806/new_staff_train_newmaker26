@@ -27,6 +27,7 @@ struct OutputInfo
     int numClasses;                 // 类别数量
     int numAnchors;                 // Anchor 数量
     std::vector<int64_t> outputShape; // 输出形状
+    bool isFeatureFirst = true;     // true=[classes+4, anchors], false=[anchors, classes+4]
 };
 
 // ============================================================
@@ -64,6 +65,7 @@ cv::Mat preprocess(
  * @param dh                     预处理时的垂直填充
  * @param confidence_threshold   置信度阈值
  * @param nms_threshold          NMS IoU 阈值
+ * @param isFeatureFirst         输出布局: true=[classes+4, anchors], false=[anchors, classes+4]
  * @return                       检测结果列表
  *
  * 注意：此函数假设模型输出像素坐标（0~input_size），非归一化。
@@ -78,7 +80,8 @@ std::vector<Detection> parseYOLOv8Output(
     int dw,
     int dh,
     float confidence_threshold,
-    float nms_threshold
+    float nms_threshold,
+    bool isFeatureFirst = true
 );
 
 // ============================================================

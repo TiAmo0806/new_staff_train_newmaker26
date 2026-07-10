@@ -63,18 +63,26 @@ std::vector<Detection> parseYOLOv8Output(
     int dw,
     int dh,
     float confidence_threshold,
-    float nms_threshold)
+    float nms_threshold,
+    bool isFeatureFirst)
 {
     std::vector<Detection> detections;
+    int elemPerAnchor = numClasses + 4;  // 每个 anchor 的字段数
 
-    // 输出格式：[num_anchors, num_classes + 4]
     for (int a = 0; a < numAnchors; ++a) {
         // 找到最大得分的类别
         int bestClass = -1;
         float bestScore = -1.0f;
 
         for (int c = 0; c < numClasses; ++c) {
-            float score = outputData[(4 + c) * numAnchors + a];
+            float score;
+            if (isFeatureFirst) {
+                // [classes+4, anchors]: 同一 anchor 的不同字段跨 numAnchors 个元素
+                score = outputData[(4 + c) * numAnchors + a];
+            } else {
+                // [anchors, classes+4]: 同一 anchor 的 84 个字段连续存放
+                score = outputData[a * elemPerAnchor + 4 + c];
+            }
             if (score > bestScore) {
                 bestScore = score;
                 bestClass = c;
@@ -87,10 +95,19 @@ std::vector<Detection> parseYOLOv8Output(
         }
 
         // 解析边界框 — 模型输出是输入空间像素坐标 (0~input_size)
-        float cx = outputData[0 * numAnchors + a];
-        float cy = outputData[1 * numAnchors + a];
-        float w = outputData[2 * numAnchors + a];
-        float h = outputData[3 * numAnchors + a];
+        float cx, cy, w, h;
+        if (isFeatureFirst) {
+            cx = outputData[0 * numAnchors + a];
+            cy = outputData[1 * numAnchors + a];
+            w  = outputData[2 * numAnchors + a];
+            h  = outputData[3 * numAnchors + a];
+        } else {
+            int base = a * elemPerAnchor;
+            cx = outputData[base + 0];
+            cy = outputData[base + 1];
+            w  = outputData[base + 2];
+            h  = outputData[base + 3];
+        }
 
         // 输入空间 → 原图空间：先去 padding，再除以缩放比 r
         // x_original = (cx - w/2 - dw) / r = (cx - w/2 - dw) * scale
@@ -166,10 +183,12 @@ OutputInfo getOutputInfo(Ort::Session& session)
                 // [batch, anchors, classes+4]
                 info.numAnchors = dim1;
                 info.numClasses = dim2 - 4;
+                info.isFeatureFirst = false;
             } else {
                 // [batch, classes+4, anchors]
                 info.numClasses = dim1 - 4;
                 info.numAnchors = dim2;
+                info.isFeatureFirst = true;
             }
         } else {
             std::cerr << "未知的输出形状，使用默认值" << std::endl;
