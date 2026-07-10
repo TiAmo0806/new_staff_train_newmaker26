@@ -1,0 +1,32 @@
+# Bean Sorting System - Configuration
+# 视觉抓豆分拣系统配置文件
+
+communication:
+  vision_port: "/dev/ttyACM0"    # 视觉端串口 (虚拟: /tmp/tty_bean_vision)
+  control_port: "/dev/ttyACM1"   # 控制端串口 (虚拟: /tmp/tty_bean_control)
+  baudrate: 115200
+  auto_reconnect: true
+  tx_log: true
+  rx_log: false
+  send_retries: 3
+
+detection:
+  # 替换为真实视觉模型的参数
+  confidence_threshold: 0.75
+  bin_mapping:
+    soybean: 1    # 黄豆 -> 箱1
+    mung: 2       # 绿豆 -> 箱2
+    kidney: 3     # 白芸豆 -> 箱3
+  # extra_bins:
+  #   bin4: "reject"
+  #   bin5: "unclassified"
+
+timing:
+  move_time_ms: 800    # 机械臂移动时间
+  grip_time_ms: 500    # 夹爪夹取时间
+  place_time_ms: 400   # 夹爪放置时间
+  detect_delay_min: 300
+  detect_delay_max: 800
+
+debug:
+  simulated_mode: false   # true=无串口运行
