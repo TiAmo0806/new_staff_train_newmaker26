@@ -18,10 +18,14 @@ sudo apt-get install -y build-essential cmake libopencv-dev
 推荐把整个项目拷到 NUC 后重新编译：
 
 ```bash
-cd /home/nuc/bean_vision_framework
+cd /home/newmaker-11/lzy/new_staff_train_newmaker26/bean_vision_framework
 mkdir -p build
 cd build
-cmake .. -DMINDVISION_ROOT=/home/nuc/camera/linuxSDK_V2.1.0.49202602041120
+
+cmake .. \
+-DMINDVISION_ROOT=/home/newmaker-11/lzy/new_staff_train_newmaker26/thirdpart/linuxSDK_V2.1.0.37 \
+-DONNXRUNTIME_ROOT=../../thirdpart/onnxruntime-linux-x64-1.15.1
+
 cmake --build . -j$(nproc)
 ```
 
