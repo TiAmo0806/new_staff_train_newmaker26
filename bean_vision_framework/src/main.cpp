@@ -7,7 +7,10 @@
 #include "detector/BeanNumberDetector.h"
 #include "input/InputManager.h"
 #include "parser/RoiParser.h"
+#include "recognition/MultiFrameRecognitionRunner.h"
 #include "recognition/MultiFrameRecognizer.h"
+#include "recognition/RecognitionRunner.h"
+#include "recognition/SingleFrameRecognitionRunner.h"
 #include "task/TaskGenerator.h"
 #include "task/TaskStateMachine.h"
 #include "utils/DebugLogger.h"
@@ -78,6 +81,28 @@ std::unique_ptr<CommandSource> makeCommandSource(const AppConfig& config, Serial
 
     std::cerr << "Unknown command source: " << config.command.source << "\n";
     return nullptr;
+}
+
+/**
+ * @brief 根据当前输入类型创建识别执行器。
+ *
+ * 本阶段只把 RecognitionRunner 纳入 main 的对象生命周期，
+ * 不替换现有状态机调用链。
+ */
+std::unique_ptr<RecognitionRunner> makeRecognitionRunner(const AppConfig& config,
+                                                         InputManager& input,
+                                                         BeanNumberDetector& detector,
+                                                         RoiParser& parser) {
+    const bool multi_frame_input =
+        config.input.type == "camera" ||
+        config.input.type == "mindvision_camera" ||
+        config.input.type == "video";
+
+    if (multi_frame_input) {
+        return std::make_unique<MultiFrameRecognitionRunner>(config, input, detector, parser);
+    }
+
+    return std::make_unique<SingleFrameRecognitionRunner>(input, input, detector, parser);
 }
 
 /**
@@ -200,10 +225,15 @@ int main(int argc, char** argv) {
         InputManager input(config.input, config.camera);
         BeanNumberDetector detector(config.detector);
         RoiParser parser(config.roi);
+        std::unique_ptr<RecognitionRunner> recognitionRunner =
+            makeRecognitionRunner(config, input, detector, parser);
         TaskGenerator taskGenerator;
         TaskStateMachine taskStateMachine;
         Protocol protocol;
         SerialPort serial(config.serial);
+
+        // RecognitionRunner 已纳入 main 生命周期，后续阶段再接入状态机调用链。
+        (void)recognitionRunner;
 
         if (!detector.loadModel()) {
             std::cerr << "Detector load failed.\n";
