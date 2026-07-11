@@ -24,6 +24,7 @@
       DATA_4      = 6,
       DATA_5      = 7,
       UNKNOWN     = 8,
+      ERROR       = 9,   // ← 新增，区分 UNKNOWN
   };
 
   inline const char* bean_type_name(BeanType t) {
@@ -36,6 +37,7 @@
           case BeanType::DATA_3:      return "3";
           case BeanType::DATA_4:      return "4";
           case BeanType::DATA_5:      return "5";
+          case BeanType::ERROR:       return "错误";   // ← 新增
           default:                    return "未知";
       }
   }

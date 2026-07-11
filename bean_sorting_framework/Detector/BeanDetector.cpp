@@ -273,8 +273,8 @@
                   case 3: std::cout << "4"; break;
                   case 4: std::cout << "5"; break;
                   case 5: std::cout << "6"; break;
-                  case 6: std::cout << "7"; break;
-                  case 7: std::cout << "8"; break;
+                  case 6: std::cout << "ERROR(DATA_4)"; break;
+                  case 7: std::cout << "ERROR(DATA_5)"; break;
                   default: std::cout << "?";
               }
               std::cout << " 坐标=(" << (int)r.center.x
@@ -290,10 +290,22 @@
       return img;
   }
 
-  bean_sorting::VisionData BeanDetector::toVisionData(const Detection& b, uint32_t fid, uint8_t bx) const {
+   bean_sorting::VisionData BeanDetector::toVisionData(const Detection& b, uint32_t fid, uint8_t bx) const {
       bean_sorting::VisionData v;
-      v.bean_type = b.bean_type; v.target_box = bx; v.detected = true;
-      v.x = (uint16_t)b.center.x; v.y = (uint16_t)b.center.y;
-      v.confidence = b.confidence; v.frame_id = fid;
+
+      if (b.bean_type == bean_sorting::BeanType::DATA_4 ||
+          b.bean_type == bean_sorting::BeanType::DATA_5) {
+          v.bean_type = bean_sorting::BeanType::ERROR;
+      } else {
+          v.bean_type = b.bean_type;
+      }
+
+      v.target_box = bx;
+      v.detected   = true;
+      v.x          = (uint16_t)b.center.x;
+      v.y          = (uint16_t)b.center.y;
+      v.confidence = b.confidence;
+      v.frame_id   = fid;
       return v;
   }
+  
