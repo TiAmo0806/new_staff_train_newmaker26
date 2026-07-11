@@ -42,6 +42,15 @@ public:
     bool read(cv::Mat& frame);
 
     /**
+     * @brief 重置输入源的读取状态。
+     *
+     * image/mock 模式下会重置单次读取标志，使下一次 read() 可以再次成功；
+     * video 模式会尽量回到第一帧；
+     * camera/mindvision_camera 模式只清理本地读取状态，不关闭设备。
+     */
+    void reset();
+
+    /**
      * @brief 释放输入资源。
      *
      * 对 video 模式会释放 VideoCapture；

@@ -114,6 +114,32 @@ bool InputManager::read(cv::Mat& frame) {
 }
 
 /**
+ * @brief 重置输入源的读取状态。
+ */
+void InputManager::reset() {
+    if (input_config_.type == "mock" || input_config_.type == "image") {
+        image_sent_ = false;
+        return;
+    }
+
+    if (input_config_.type == "video") {
+        if (!cap_.isOpened()) {
+            return;
+        }
+        if (!cap_.set(cv::CAP_PROP_POS_FRAMES, 0)) {
+            std::cerr << "[WARN] video reset is not supported by current backend.\n";
+        }
+        return;
+    }
+
+    if (input_config_.type == "camera" || input_config_.type == "mindvision_camera") {
+        // 当前相机模式没有额外的单次读取状态。
+        // reset 不关闭设备，也不重新初始化 SDK，只保留接口语义。
+        return;
+    }
+}
+
+/**
  * @brief 释放输入资源。
  */
 void InputManager::release() {
