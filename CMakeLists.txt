@@ -77,6 +77,7 @@ set(SOURCES
     src/datection.cpp
     src/CRC16.cpp
     src/visualizer.cpp
+    src/stable_tracker.cpp
 )
 
 # ============================================================

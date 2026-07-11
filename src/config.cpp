@@ -14,13 +14,28 @@ VisionConfig loadVisionConfig(const std::string& filepath)
     try {
         YAML::Node root = YAML::LoadFile(filepath);
         //yaml-cpp 语法：如果配置文件无该字段 / 字段解析失败，直接使用括号内默认值
-        cfg.confidence_threshold = root["confidence_threshold"].as<float>(0.5f);
-        cfg.nms_threshold = root["nms_threshold"].as<float>(0.25f);
-        cfg.input_width = root["input_width"].as<int>(640);
-        cfg.input_height = root["input_height"].as<int>(640);
-        cfg.font_scale = root["font_scale"].as<double>(0.6);
-        cfg.font_thickness = root["font_thickness"].as<int>(2);
-        cfg.line_thickness = root["line_thickness"].as<int>(2);
+        if (root["detection"])
+        {
+            if (root["detection"]["confidence_threshold"])
+                cfg.confidence_threshold = root["detection"]["confidence_threshold"].as<float>();
+            if (root["detection"]["nms_threshold"])
+                cfg.nms_threshold = root["detection"]["nms_threshold"].as<float>();
+            if (root["detection"]["input_width"])
+                cfg.input_width = root["detection"]["input_width"].as<int>();
+            if (root["detection"]["input_height"])
+                cfg.input_height = root["detection"]["input_height"].as<int>();
+            if (root["detection"]["used_classes"])
+                cfg.used_classes = root["detection"]["used_classes"].as<int>();
+        }
+        if (root["display"])
+        {
+            if (root["display"]["font_scale"])
+                cfg.font_scale = root["display"]["font_scale"].as<double>();
+            if (root["display"]["font_thickness"])
+                cfg.font_thickness = root["display"]["font_thickness"].as<int>();
+            if (root["display"]["line_thickness"])
+                cfg.line_thickness = root["display"]["line_thickness"].as<int>();
+        }
         
         std::cout << "从 " << filepath << " 加载视觉参数成功" << std::endl;
     } catch (const YAML::Exception& e) {

@@ -55,7 +55,8 @@ bool Camera::open(int width, int height)
     tSdkCameraCapbility cap;
     CameraGetCapability(hCamera_, &cap);
 
-    // 设置分辨率
+    // 仅做上限约束，不修改相机实际输出分辨率
+    // 模型需要的 640x640 由 preprocess 的 letterbox 处理
     int maxW = cap.sResolutionRange.iWidthMax;
     int maxH = cap.sResolutionRange.iHeightMax;
     if (width > maxW) width = maxW;

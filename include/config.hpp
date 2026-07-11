@@ -31,14 +31,15 @@ struct VisionConfig
     float nms_threshold = 0.25f;          // NMS IoU 阈值
     int input_width = 640;                // 模型输入宽度
     int input_height = 640;               // 模型输入高度
-    
+    int used_classes = -1;                // 只用前N类（-1=全部）
+
     //显示参数
     double font_scale = 0.6;              // 文字大小
     int font_thickness = 2;               // 文字粗细
     int line_thickness = 2;               // 检测框边框粗细
 };
 
-//加载函数声明
+//加载参数函数声明
 VisionConfig loadVisionConfig(const std::string& filepath = "config/vision_config.yaml");
 
 //颜色表生成函数声明

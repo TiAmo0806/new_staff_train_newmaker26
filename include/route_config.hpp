@@ -20,14 +20,18 @@ namespace fs = std::filesystem;
 //  路径指令结构体
 struct PathCommand {
     uint8_t first_cmd = 0;      // 0=直行, 1=左转, 2=右转
-    uint8_t second_cmd = 1;     // 1=左分支, 2=中分支, 3=右分支
-    uint8_t turn_strength = 30; // 转弯强度 10~80
+    uint8_t second_cmd = 2;     // 1=左分支, 2=中分支, 3=右分支
+    uint8_t turn_strength = 0; // 转弯强度 10~80
 };
 
 //  工具：安全获取文件修改时间（文件不存在返回零值）
 inline fs::file_time_type safeLastWriteTime(const std::string& path)
 {
     std::error_code ec;
+    /*
+    C++ 标准库提供的“静默错误”容器。如果下面调用文件系统 API 时出了岔子
+    （比如文件不存在、权限不够），错误信息不会抛异常，而是悄悄地存进 ec 里，等着我们去检查它。
+    */
     auto t = fs::last_write_time(path, ec);
     if (ec) return fs::file_time_type::min();
     return t;

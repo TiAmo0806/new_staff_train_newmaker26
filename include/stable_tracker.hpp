@@ -26,48 +26,7 @@ public:
      */
     std::optional<std::string> update(
         const std::vector<Detection>& detections,
-        const std::vector<std::string>& classNames)
-    {
-        const Detection* best = bestDetection(detections);
-        if (!best) {
-            reset();
-            return std::nullopt;
-        }
-
-        std::string name = classNames[best->class_id];
-
-        // 冷却期：发送后沉默 N 帧，期满自动解锁
-        if (name == last_sent_) {
-            cooldown_counter_++;
-            if (cooldown_counter_ >= cooldown_frames_) {
-                last_sent_.clear();
-                cooldown_counter_ = 0;
-                // 冷却期满，从头开始计数
-                stable_name_ = name;
-                stable_counter_ = 1;
-            }
-            return std::nullopt;
-        }
-
-        // 持续一致则计数
-        if (name == stable_name_) {
-            stable_counter_++;
-        } else {
-            stable_name_ = name;
-            stable_counter_ = 1;
-        }
-
-        // 达到阈值 → 确认，进入冷却
-        if (stable_counter_ >= threshold_) {
-            last_sent_ = name;
-            cooldown_counter_ = 0;
-            stable_counter_ = 0;
-            stable_name_.clear();
-            return name;
-        }
-
-        return std::nullopt;
-    }
+        const std::vector<std::string>& classNames);
 
     /// 完全重置
     void reset()
@@ -87,14 +46,7 @@ public:
     int cooldownFrames()               const { return cooldown_frames_; }
 
 private:
-    static const Detection* bestDetection(const std::vector<Detection>& dets)
-    {
-        if (dets.empty()) return nullptr;
-        const Detection* best = &dets[0];
-        for (const auto& d : dets)
-            if (d.confidence > best->confidence) best = &d;
-        return best;
-    }
+    static const Detection* bestDetection(const std::vector<Detection>& dets);
 
     std::string stable_name_;
     int stable_counter_ = 0;

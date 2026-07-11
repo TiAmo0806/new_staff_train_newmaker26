@@ -1,6 +1,7 @@
 /**
  * yolo_detector.hpp —— YOLO 检测器封装
  * 封装 ONNX Runtime 推理全流程：加载模型 → 预处理 → 推理 → 解析输出
+ * 它的 Ort::Session是模板类，必须头文件能看到完整定义，所以只能这样。
  */
 
 #ifndef YOLO_DETECTOR_HPP_
@@ -130,17 +131,29 @@ public:
         const float* data = outputs[0].GetTensorData<float>();
 
         //解析输出
-        return parseYOLOv8Output(data,
-            outputInfo_.numClasses, outputInfo_.numAnchors,
-            frame.cols, frame.rows,
-            scale, dw, dh,
-            confidenceThreshold, nmsThreshold_,
-            outputInfo_.isFeatureFirst);
+        if (outputInfo_.isFeatureFirst) {
+            return parseYOLOv8OutputFeatureFirst(data,
+                outputInfo_.numClasses, outputInfo_.numAnchors,
+                frame.cols, frame.rows,
+                scale, dw, dh,
+                confidenceThreshold, nmsThreshold_,
+                usedClasses_);
+        } else {
+            return parseYOLOv8OutputAnchorFirst(data,
+                outputInfo_.numClasses, outputInfo_.numAnchors,
+                frame.cols, frame.rows,
+                scale, dw, dh,
+                confidenceThreshold, nmsThreshold_,
+                usedClasses_);
+        }
         //通过后处理（parseYOLOv8Output）把 8400 个的候选框，精挑细选成几个精准的检测框
     }
 
-    //设置 NMS 阈值 
+    //设置 NMS 阈值
     void setNmsThreshold(float t) { nmsThreshold_ = t; }
+
+    //设置只用前N类（-1=全部）
+    void setUsedClasses(int n) { usedClasses_ = n; }
 
     //获取模型输入尺寸 
     int inputWidth()  const { return inputWidth_; }
@@ -159,6 +172,7 @@ private:
     int inputWidth_ = 640;
     int inputHeight_ = 640;
     float nmsThreshold_ = 0.25f;
+    int usedClasses_ = -1;
 };
 
 #endif  // YOLO_DETECTOR_HPP_

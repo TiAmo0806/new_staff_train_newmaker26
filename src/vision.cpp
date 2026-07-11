@@ -1,5 +1,5 @@
 /**
- * vision.cpp —— NUC 视觉主程序
+ * vision.cpp —— NUC 视觉主程序（函数式重构）
  *
  * ── 数据流 ──
  *   相机 → YOLO推理 → 稳定跟踪 → 查表 → 串口发送
@@ -12,6 +12,8 @@
 #include <chrono>
 #include <thread>
 #include <filesystem>
+#include <tuple>
+#include <optional>
 #include <opencv2/opencv.hpp>
 
 #include "config.hpp"
@@ -26,178 +28,324 @@
 
 namespace fs = std::filesystem;
 
-int main()
+// ============================================================
+//  类型别名
+// ============================================================
+
+using Configs = std::tuple<VisionConfig, RouteConfig, fs::file_time_type>;
+
+struct ReloadResult {
+    VisionConfig cfg;
+    fs::file_time_type mtime;
+    bool changed;
+};
+
+// ============================================================
+//  1. 初始化 —— 各自独立，返回值表达结果
+// ============================================================
+
+static Configs loadAllConfigs(const std::string& visionPath,
+                              const std::string& routePath)
 {
-    std::cout << "NUC 视觉节点启动" << std::endl;
+    auto cfg    = loadVisionConfig(visionPath);
+    auto routes = RouteConfig{};
+    routes.load(routePath);
+    auto lastMtime = safeLastWriteTime(visionPath);
+    return {cfg, routes, lastMtime};
+}
 
-    // 配置 
-    std::string visionCfgPath = resolveProjectPath("vision_config.yaml");
-    std::string routeCfgPath  = resolveProjectPath("route_config.txt");
-
-    VisionConfig cfg = loadVisionConfig(visionCfgPath);
-    RouteConfig  routes;  routes.load(routeCfgPath);
-    auto lastVisionMtime = safeLastWriteTime(visionCfgPath);
-    auto colors = buildColorTable(CLASS_NAMES.size());
-
-    // 模型（可降级） 
-    YOLODetector detector;
-    bool modelOk = detector.loadModel(resolveProjectPath("best.onnx"),
-                                      cfg.input_width, cfg.input_height);
-    if (modelOk) {
+static bool
+initDetector(YOLODetector& detector,
+             const std::string& modelPath, const VisionConfig& cfg)
+{
+    bool ok = detector.loadModel(modelPath, cfg.input_width, cfg.input_height);
+    if (ok) {
         detector.setNmsThreshold(cfg.nms_threshold);
+        detector.setUsedClasses(cfg.used_classes);
         std::cout << "YOLO 模型已加载" << std::endl;
     } else {
         std::cerr << "模型未加载，将只显示相机画面（无检测）" << std::endl;
     }
+    return ok;
+}
 
-    // 相机
-    Camera cam;
-    if (!cam.open(cfg.input_width, cfg.input_height)) {
-        std::cerr << "相机打开失败" << std::endl;
-        return -1;
+
+static bool initSerial(SerialPort& serial, const std::string& port)
+{
+    bool ok = serial.open(port);
+    if (ok)
+        std::cout << "串口已打开 (" << port << ")" << std::endl;
+    else
+        std::cerr << "串口未打开 (" << port << ")，将只显示画面（无发送）" << std::endl;
+    return ok;
+}
+
+// ============================================================
+//  2. 热重载 —— 输入旧状态，输出新状态
+// ============================================================
+
+static ReloadResult
+reloadVisionIfChanged(const std::string& path,
+                      const VisionConfig& oldCfg,
+                      const fs::file_time_type& lastMtime)
+{
+    auto nowMtime = safeLastWriteTime(path);
+    if (nowMtime != lastMtime) {
+        std::cout << "视觉参数变化，重载..." << std::endl;
+        return {loadVisionConfig(path), nowMtime, true};
     }
-    std::cout << "相机已打开 (" << cfg.input_width << "x" << cfg.input_height << ")" << std::endl;
+    return {oldCfg, lastMtime, false};
+}
 
-    // 串口（可降级），通过 udev 规则 /dev/gimbal->实际设备
-    SerialPort serial;
-    bool serialOk = serial.open("/dev/gimbal");
+static RouteConfig
+reloadRoutesIfChanged(const std::string& path, RouteConfig routes)
+{
+    if (routes.fileChanged()) {
+        std::cout << "路径映射变化，重载..." << std::endl;
+        routes.load(path);
+    }
+    return routes;
+}
+
+// ============================================================
+//  3. 采集 —— 带自动重连
+// ============================================================
+
+static std::optional<cv::Mat>
+captureFrame(Camera& cam, const VisionConfig& cfg, int& emptyCount)
+{
+    auto frame = cam.getFrame();
+    if (!frame.empty()) {
+        emptyCount = 0;
+        return frame;
+    }
+
+    emptyCount++;
+    if (emptyCount == 50) {
+        std::cerr << "连续空帧，尝试重连相机..." << std::endl;
+        cam.close();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (cam.open(cfg.input_width, cfg.input_height))
+            std::cout << "相机重连成功" << std::endl;
+        emptyCount = 0;
+    }
+    return std::nullopt;
+}
+
+// ============================================================
+//  4. 推理 + 诊断
+// ============================================================
+
+static std::vector<Detection>
+runInference(const cv::Mat& frame, YOLODetector& detector,
+             const VisionConfig& cfg, bool modelOk)
+{
+    if (!modelOk) return {};
+    return detector.infer(frame, cfg.confidence_threshold);
+}
+
+static void printDiagnostics(int frameCount,
+                             const std::vector<Detection>& dets,
+                             const cv::Mat& frame,
+                             const VisionConfig& cfg)
+{
+    if (frameCount % 30 != 0) return;
+
+    std::cout << "[帧#" << frameCount << "] "
+              << "检测数:" << dets.size()
+              << " 帧尺寸:" << frame.cols << "x" << frame.rows
+              << " 阈值:" << cfg.confidence_threshold;
+
+    for (const auto& d : dets) {
+        std::cout << "\n    → " << CLASS_NAMES[d.class_id]
+                  << " conf=" << d.confidence
+                  << " bbox=(" << d.bbox.x << "," << d.bbox.y
+                  << " " << d.bbox.width << "x" << d.bbox.height << ")";
+    }
+    if (dets.empty()) std::cout << " (无检出)";
+    std::cout << std::endl;
+}
+
+// ============================================================
+//  5. 指令发送 —— 封包 → CRC → 发送（或模拟打印）
+// ============================================================
+
+static void sendCommand(const std::string& targetName,
+                        uint8_t firstCmd, uint8_t secondCmd, uint8_t turnStrength,
+                        SerialPort& serial, bool serialOk)
+{
+    auto packet = path_serial_driver::makePacket(firstCmd, secondCmd, turnStrength);
+
+    crc16::Append_CRC16_Check_Sum(
+        reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
+
+    auto data = path_serial_driver::toVector(packet);
+
     if (serialOk) {
-        std::cout << "串口已打开 (/dev/gimbal)" << std::endl;
-    } else {
-        std::cerr << "串口未打开 (/dev/gimbal)，将只显示画面（无发送）" << std::endl;
+        serial.send(data.data(), data.size());
+        return;
     }
+
+    // 模拟模式
+    auto cmdName = [](uint8_t v, uint8_t a, uint8_t b, uint8_t c) -> const char* {
+        if (v == a) return "直行";
+        if (v == b) return "左转";
+        if (v == c) return "右转";
+        return "?";
+    };
+    auto branchName = [](uint8_t v) -> const char* {
+        if (v == 1) return "左分支";
+        if (v == 2) return "中分支";
+        if (v == 3) return "右分支";
+        return "?";
+    };
+    std::cout << "[模拟] " << targetName << std::endl;
+    std::cout << "──────────────────────────────" << std::endl;
+    std::cout << "  指令:  first=" << (int)firstCmd
+              << " (" << cmdName(firstCmd, 0, 1, 2) << ")"
+              << "  second=" << (int)secondCmd
+              << " (" << branchName(secondCmd) << ")" << std::endl;
+    std::cout << "  转弯强度: " << (int)turnStrength << std::endl;
+    std::cout << "  原始字节 (" << data.size() << "B): ";
+    for (size_t i = 0; i < data.size(); ++i)
+        std::cout << std::hex << (int)data[i] << " ";
+    std::cout << std::dec << "\n" << std::endl;
+}
+
+// ============================================================
+//  6. 显示
+// ============================================================
+
+static bool renderFrame(cv::Mat& frame,
+                        const std::vector<Detection>& dets,
+                        const StableTracker& tracker,
+                        const VisionConfig& cfg,
+                        const std::vector<cv::Scalar>& colors,
+                        bool modelOk, bool serialOk, double fps,
+                        const std::chrono::steady_clock::time_point& t0)
+{
+    drawDebug(frame, dets, tracker, cfg, colors, modelOk, serialOk, fps);
+
+    constexpr int targetFps = 30;
+    int delay   = 1000 / targetFps;
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - t0)
+                       .count();
+    int waitMs = std::max(5, delay - static_cast<int>(elapsed));
+    return cv::waitKey(waitMs) == 'q';
+}
+
+// ============================================================
+//  7. 主循环 —— 编排 pipeline
+// ============================================================
+
+static void runLoop(Camera& cam,
+                    YOLODetector& detector,
+                    SerialPort& serial,
+                    VisionConfig         cfg,
+                    RouteConfig          routes,
+                    const std::string&   visionPath,
+                    const std::string&   routePath,
+                    bool                 modelOk,
+                    bool                 serialOk,
+                    const std::vector<cv::Scalar>& colors)
+{
+    auto lastVisionMtime = safeLastWriteTime(visionPath);
+    StableTracker tracker(90);
+    int frameCount   = 0;
+    int emptyCount   = 0;
+    double fps       = 0.0;
+    auto lastTime    = std::chrono::steady_clock::now();
 
     std::cout << "按 'q' 退出 | 模型:" << (modelOk ? "true" : "false")
               << " | 串口:" << (serialOk ? "true" : "false") << std::endl;
-
-    // 主循环
-    StableTracker tracker(90);
-    cv::Mat frame;
-    auto lastTime = std::chrono::steady_clock::now();
-    double fps = 0;
-    int frameCount = 0;
 
     while (true) {
         auto t0 = std::chrono::steady_clock::now();
         frameCount++;
 
-        // FPS 计算
-        auto dt = std::chrono::duration<double>(t0 - lastTime).count();
-        lastTime = t0;
-        fps = (dt > 0) ? 1.0 / dt : 0;
+        // FPS
+        {
+            auto dt = std::chrono::duration<double>(t0 - lastTime).count();
+            lastTime = t0;
+            fps = (dt > 0) ? 1.0 / dt : 0.0;
+        }
 
         // 热重载
-        if (routes.fileChanged()) {
-            std::cout << "路径映射变化，重载..." << std::endl;
-            routes.load(routeCfgPath);
-        }
-        auto nowMtime = safeLastWriteTime(visionCfgPath);
-        if (nowMtime != lastVisionMtime) {
-            std::cout << "视觉参数变化，重载..." << std::endl;
-            cfg = loadVisionConfig(visionCfgPath);
-            if (modelOk) detector.setNmsThreshold(cfg.nms_threshold);
-            lastVisionMtime = nowMtime;
+        routes = reloadRoutesIfChanged(routePath, std::move(routes));
+        {
+            auto [newCfg, newMtime, changed] =
+                reloadVisionIfChanged(visionPath, cfg, lastVisionMtime);
+            if (changed) {
+                cfg = newCfg;
+                lastVisionMtime = newMtime;
+                if (modelOk) {
+                    detector.setNmsThreshold(cfg.nms_threshold);
+                    detector.setUsedClasses(cfg.used_classes);
+                }
+            }
         }
 
         // 采集
-        static int emptyCount = 0;
-        frame = cam.getFrame();
-        if (frame.empty()) {
-            emptyCount++;
-            // 连续 50 次空帧 → 尝试重连相机
-            if (emptyCount == 50) {
-                std::cerr << "连续空帧，尝试重连相机..." << std::endl;
-                cam.close();
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                if (cam.open(cfg.input_width, cfg.input_height)) {
-                    std::cout << "相机重连成功" << std::endl;
-                }
-                emptyCount = 0;
-            }
-            continue;
-        }
-        emptyCount = 0;  // 拿到正常帧，重置计数
+        auto maybeFrame = captureFrame(cam, cfg, emptyCount);
+        if (!maybeFrame) continue;   // 空帧，下一轮
+        auto& frame = *maybeFrame;
 
-        // 推理（有模型才跑）
-        std::vector<Detection> dets;
-        if (modelOk) {
-            dets = detector.infer(frame, cfg.confidence_threshold);
+        // 推理
+        auto dets = runInference(frame, detector, cfg, modelOk);
+        printDiagnostics(frameCount, dets, frame, cfg);
 
-            // 每 30 帧輸出一次診斷
-            if (frameCount % 30 == 0) {
-                std::cout << "[帧#" << frameCount << "] "
-                          << "检测数:" << dets.size()
-                          << " 帧尺寸:" << frame.cols << "x" << frame.rows
-                          << " 阈值:" << cfg.confidence_threshold;
-                for (size_t i = 0; i < dets.size(); ++i) {
-                    const auto& d = dets[i];
-                    std::cout << "\n    → " << CLASS_NAMES[d.class_id]
-                              << " conf=" << d.confidence
-                              << " bbox=(" << d.bbox.x << "," << d.bbox.y
-                              << " " << d.bbox.width << "x" << d.bbox.height << ")";
-                }
-                if (dets.empty()) std::cout << " (无检出)";
-                std::cout << std::endl;
-            }
-        }
-
-        // 跟踪 → 查表 → 封包 → 串口发送
+        // 跟踪 → 查表 → 发送
         if (auto target = tracker.update(dets, CLASS_NAMES)) {
-            auto cmd = routes.lookup(*target);
-            if (cmd) {
-                // 构建数据包
-                auto packet = path_serial_driver::makePacket(
-                    cmd->first_cmd, cmd->second_cmd, cmd->turn_strength);
-
-                // CRC16 校验
-                crc16::Append_CRC16_Check_Sum(
-                    reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
-
-                // 序列化为字节数组
-                auto data = path_serial_driver::toVector(packet);
-
-                if (serialOk) {
-                    // 实际发送
-                    serial.send(data.data(), data.size());
-                } else {
-                    // 模拟模式：只打印封包内容
-                    auto cmdName = [](uint8_t v, uint8_t a, uint8_t b, uint8_t c) -> const char* {
-                        if (v == a) return "直行";
-                        if (v == b) return "左转";
-                        if (v == c) return "右转";
-                        return "?";
-                    };
-                    auto branchName = [](uint8_t v) -> const char* {
-                        if (v == 1) return "左分支";
-                        if (v == 2) return "中分支";
-                        if (v == 3) return "右分支";
-                        return "?";
-                    };
-                    std::cout << "[模拟] " << *target << std::endl;
-                    std::cout << "──────────────────────────────" << std::endl;
-                    std::cout << "  指令:  first=" << (int)cmd->first_cmd
-                              << " (" << cmdName(cmd->first_cmd, 0, 1, 2) << ")"
-                              << "  second=" << (int)cmd->second_cmd
-                              << " (" << branchName(cmd->second_cmd) << ")" << std::endl;
-                    std::cout << "  转弯强度: " << (int)cmd->turn_strength << std::endl;
-                    std::cout << "  原始字节 (" << data.size() << "B): ";
-                    for (size_t i = 0; i < data.size(); ++i)
-                        std::cout << std::hex << (int)data[i] << " ";
-                    std::cout << std::dec << std::endl;
-                    std::cout << std::endl;
-                }
+            if (auto cmd = routes.lookup(*target)) {
+                sendCommand(*target, cmd->first_cmd, cmd->second_cmd,
+                            cmd->turn_strength, serial, serialOk);
             }
         }
 
-        // 显示（waitKey 同时处理 GUI 事件 + 帧率控制）
-        drawDebug(frame, dets, tracker, cfg, colors, modelOk, serialOk, fps);
-        int delay = 1000 / 30;  // 目标 30fps → 33ms 间隔
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - t0).count();
-        int waitMs = std::max(5, delay - static_cast<int>(elapsed));
-        if (cv::waitKey(waitMs) == 'q') break;
+        // 显示
+        if (renderFrame(frame, dets, tracker, cfg, colors,
+                        modelOk, serialOk, fps, t0))
+            break;
     }
 
     std::cout << "程序正常退出" << std::endl;
+}
+
+// ============================================================
+//  8. 入口 —— 纯组装
+// ============================================================
+
+int main()
+{
+    std::cout << "NUC 视觉节点启动" << std::endl;
+
+    const auto visionPath = resolveProjectPath("vision_config.yaml");
+    const auto routePath  = resolveProjectPath("route_config.txt");
+
+    // 初始化 —— 每个组件独立
+    auto [cfg, routes, lastMtime] = loadAllConfigs(visionPath, routePath);
+    auto colors                   = buildColorTable(CLASS_NAMES.size());
+
+    YOLODetector detector;
+    bool modelOk = initDetector(detector, resolveProjectPath("best.onnx"), cfg);
+
+    Camera cam;
+    if (!cam.open(cfg.input_width, cfg.input_height)) {
+        std::cerr << "相机打开失败" << std::endl;
+        return -1;
+    }
+    std::cout << "相机已打开 (" << cfg.input_width << "x"
+              << cfg.input_height << ")" << std::endl;
+
+    SerialPort serial;
+    bool serialOk = initSerial(serial, "/dev/gimbal");
+
+    // 进入主循环（所有权移交）
+    runLoop(cam, detector, serial,
+            cfg, routes,
+            visionPath, routePath,
+            modelOk, serialOk,
+            colors);
     return 0;
 }

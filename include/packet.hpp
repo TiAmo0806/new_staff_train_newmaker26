@@ -1,6 +1,6 @@
 /**
  * packet.hpp —— 串口数据包定义
- * 使用显式 uint16_t + 位运算代替 bit-field，确保跨平台字节布局一致
+ * 使用 bit-field 简化读写，static_assert 保证跨平台布局一致
  */
 
 #ifndef PATH_SERIAL_DRIVER__PACKET_HPP_
@@ -16,32 +16,37 @@ namespace path_serial_driver
 struct VisionSendPacket
 {
     uint8_t  header   = 0x5A;  // 帧头
-    // cmd_word 位布局 (little-endian):
-    //   bit0-1  = first_cmd       (0=直行, 1=左转, 2=右转)
-    //   bit2-3  = second_cmd      (1=左分支, 2=中分支, 3=右分支)
-    //   bit4-10 = turn_strength   (0~120)
-    uint16_t cmd_word = 0;
-    uint16_t checksum = 0;      // CRC16
+
+    uint16_t first_cmd      : 2;   // bit 0-1  (0=直行, 1=左转, 2=右转)
+    uint16_t second_cmd     : 2;   // bit 2-3  (1=左分支, 2=中分支, 3=右分支)
+    uint16_t turn_strength  : 7;   // bit 4-10 (0~120)
+    uint16_t reserved       : 5;   // bit 11-15
+
+    uint16_t checksum = 0;        // CRC16
 } __attribute__((packed));
 
+// 编译时校验布局 —— 错位则编译不通过
 static_assert(sizeof(VisionSendPacket) == 5,
               "VisionSendPacket size mismatch — should be exactly 5 bytes");
+static_assert(offsetof(VisionSendPacket, checksum) == 3,
+              "VisionSendPacket checksum offset wrong");
 
-/// 构建数据包（checksum 初始为 0，调用方自行填充 CRC）
+/// 构造数据包
 inline VisionSendPacket makePacket(uint8_t first_cmd,
                                    uint8_t second_cmd,
                                    uint8_t turn_strength)
 {
     VisionSendPacket p;
-    p.header   = 0x5A;
-    p.cmd_word = (first_cmd & 0x03)
-               | ((second_cmd & 0x03) << 2)
-               | ((turn_strength & 0x7F) << 4);
-    p.checksum = 0;
+    p.header         = 0x5A;
+    p.first_cmd      = first_cmd;
+    p.second_cmd     = second_cmd;
+    p.turn_strength  = turn_strength;
+    p.reserved       = 0;
+    p.checksum       = 0;
     return p;
 }
 
-/// 序列化：结构体 → 字节数组（NUC 发送用）
+/// 序列化：结构体 → 字节数组
 inline std::vector<uint8_t> toVector(const VisionSendPacket& data)
 {
     std::vector<uint8_t> packet(sizeof(VisionSendPacket));
@@ -52,39 +57,12 @@ inline std::vector<uint8_t> toVector(const VisionSendPacket& data)
     return packet;
 }
 
-/// 反序列化：字节数组 → 结构体（单片机接收用）
+/// 反序列化：字节数组 → 结构体
 inline VisionSendPacket fromVector(const std::vector<uint8_t>& data)
 {
     VisionSendPacket packet;
     std::copy(data.begin(), data.end(), reinterpret_cast<uint8_t*>(&packet));
     return packet;
-}
-
-// 解包：从 VisionSendPacket / 字节数组提取字段 
-
-/// 从结构体提取 first_cmd（0=直行, 1=左转, 2=右转）
-inline uint8_t getFirstCmd(const VisionSendPacket& p) {
-    return p.cmd_word & 0x03;
-}
-
-/// 从结构体提取 second_cmd（1=左分支, 2=中分支, 3=右分支）
-inline uint8_t getSecondCmd(const VisionSendPacket& p) {
-    return (p.cmd_word >> 2) & 0x03;
-}
-
-/// 从结构体提取 turn_strength（0~120）
-inline uint8_t getTurnStrength(const VisionSendPacket& p) {
-    return (p.cmd_word >> 4) & 0x7F;
-}
-
-/// 一键解包：从字节数组直接提取三个字段（跳过 header + CRC）
-inline void unpack(const std::vector<uint8_t>& data,
-                   uint8_t& first, uint8_t& second, uint8_t& strength)
-{
-    auto p = fromVector(data);
-    first    = getFirstCmd(p);
-    second   = getSecondCmd(p);
-    strength = getTurnStrength(p);
 }
 
 }  // namespace path_serial_driver
