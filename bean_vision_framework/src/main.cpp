@@ -121,12 +121,16 @@ void runCommandLoop(CommandSource& commandSource,
         printTerminalCommands();
     }
 
+    const bool single_frame_runner_mode =
+        config.input.type == "mock" ||
+        config.input.type == "image";
     const bool camera_command_mode =
         config.input.type == "camera" ||
         config.input.type == "mindvision_camera" ||
         config.input.type == "video";
     MultiFrameRecognizer recognizer(config);
-    if (camera_command_mode && !input.open()) {
+    const bool open_input_for_command_mode = single_frame_runner_mode || camera_command_mode;
+    if (open_input_for_command_mode && !input.open()) {
         std::cerr << "Input open failed.\n";
         return;
     }
@@ -141,7 +145,7 @@ void runCommandLoop(CommandSource& commandSource,
         }
     }
 
-    if (camera_command_mode) {
+    if (open_input_for_command_mode) {
         input.release();
     }
 }
@@ -228,12 +232,9 @@ int main(int argc, char** argv) {
         std::unique_ptr<RecognitionRunner> recognitionRunner =
             makeRecognitionRunner(config, input, detector, parser);
         TaskGenerator taskGenerator;
-        TaskStateMachine taskStateMachine;
+        TaskStateMachine taskStateMachine(*recognitionRunner);
         Protocol protocol;
         SerialPort serial(config.serial);
-
-        // RecognitionRunner 已纳入 main 生命周期，后续阶段再接入状态机调用链。
-        (void)recognitionRunner;
 
         if (!detector.loadModel()) {
             std::cerr << "Detector load failed.\n";

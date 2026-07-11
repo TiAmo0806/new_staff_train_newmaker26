@@ -13,7 +13,7 @@ SerialCommandSource::SerialCommandSource(SerialPort& serial) : serial_(serial) {
 /**
  * @brief 从串口读取下一条电控命令。
  * @param line 输出转换后的命令文本。
- * @return 当前还未实现 C 板命令包解析，因此返回 false。
+ * @return 成功读取并转换出一条命令时返回 true；串口读取失败时返回 false。
  */
 bool SerialCommandSource::next(std::string& line) {
     line.clear();
@@ -36,11 +36,13 @@ bool SerialCommandSource::next(std::string& line) {
         switch (static_cast<ProtocolCommand>(parsed.cmd)) {
         case ProtocolCommand::ArriveBean:
             serial_.writeAck(parsed.cmd, parsed.seq);
-            line = "arrive_bean";
+            // Bean 流程当前已迁移到 RecognitionRunner，状态机只要求命令格式保留 image_path 占位。
+            line = "arrive_bean __serial__";
             return true;
         case ProtocolCommand::ArriveDigit:
             serial_.writeAck(parsed.cmd, parsed.seq);
-            line = "arrive_digit";
+            // Digit 流程仍走旧的图片路径逻辑，先保留占位参数格式以维持主循环接线。
+            line = "arrive_digit __serial__";
             return true;
         case ProtocolCommand::Reset:
             serial_.writeAck(parsed.cmd, parsed.seq);

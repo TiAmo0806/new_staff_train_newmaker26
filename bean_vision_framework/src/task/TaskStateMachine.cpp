@@ -41,7 +41,7 @@ const char* stateName(TaskState state) {
 /**
  * @brief 构造状态机，初始状态为 WAIT_BEAN_COMMAND。
  */
-TaskStateMachine::TaskStateMachine() {
+TaskStateMachine::TaskStateMachine(RecognitionRunner& runner) : runner_(runner) {
     logInitialState();
 }
 
@@ -135,7 +135,7 @@ bool TaskStateMachine::processCommand(const std::string& line,
             std::cout << "[WARN] expected arrive_digit <image_path>\n";
             return true;
         }
-        return handleArriveBean(image_path, detector, parser, protocol, serial, config, force_print);
+        return handleArriveBean(image_path, protocol, serial, config, force_print);
     }
     if (command == "arrive_digit") {
         if (state_ != TaskState::WAIT_DIGIT_COMMAND) {
@@ -217,8 +217,6 @@ bool TaskStateMachine::processCameraCommand(const std::string& line,
  * @return 返回 true 表示继续等待后续命令。
  */
 bool TaskStateMachine::handleArriveBean(const std::string& image_path,
-                                        BeanNumberDetector& detector,
-                                        RoiParser& parser,
                                         Protocol& protocol,
                                         SerialPort& serial,
                                         const AppConfig& config,
@@ -229,20 +227,13 @@ bool TaskStateMachine::handleArriveBean(const std::string& image_path,
     }
 
     std::cout << "[RX MOCK] ARRIVE_BEAN image=" << image_path << "\n";
-    cv::Mat frame = cv::imread(image_path);
-    if (frame.empty()) {
-        std::cout << "[ERROR] image not found: " << image_path << "\n";
-        return true;
-    }
-
     setState(TaskState::SCAN_BEANS);
-    std::vector<Detection> detections = detector.detect(frame);
-    std::cout << "[YOLO] detections=" << detections.size() << "\n";
+    (void)config;
+    (void)force_print;
 
-    VisionResult result = parser.parse(detections);
-    DebugLogger::saveCommandImages("arrive_bean", image_path, frame, detections, result, config, force_print);
-    if (detections.empty()) {
-        std::cout << "[WARN] no YOLO detections\n";
+    VisionResult result;
+    if (!runner_.scanBeans(result)) {
+        std::cout << "[WARN] bean recognition runner failed\n";
         setState(TaskState::WAIT_BEAN_COMMAND);
         return true;
     }

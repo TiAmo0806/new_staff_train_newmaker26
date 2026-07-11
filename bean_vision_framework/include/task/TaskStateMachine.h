@@ -9,6 +9,7 @@
 #include "input/InputManager.h"
 #include "parser/RoiParser.h"
 #include "recognition/MultiFrameRecognizer.h"
+#include "recognition/RecognitionRunner.h"
 #include "task/TaskGenerator.h"
 #include "task/VisionMemory.h"
 
@@ -40,7 +41,7 @@ public:
     /**
      * @brief 构造状态机，初始状态为 WAIT_BEAN_COMMAND。
      */
-    TaskStateMachine();
+    explicit TaskStateMachine(RecognitionRunner& runner);
 
     /**
      * @brief 处理一帧视觉结果，并在信息完整时推进状态。
@@ -136,8 +137,6 @@ private:
      * @return 命令循环是否继续执行。
      */
     bool handleArriveBean(const std::string& image_path,
-                          BeanNumberDetector& detector,
-                          RoiParser& parser,
                           Protocol& protocol,
                           SerialPort& serial,
                           const AppConfig& config,
@@ -188,4 +187,5 @@ private:
     VisionMemory memory_;
     TaskResult taskResult_;
     std::vector<uint8_t> packet_;
+    RecognitionRunner& runner_;
 };

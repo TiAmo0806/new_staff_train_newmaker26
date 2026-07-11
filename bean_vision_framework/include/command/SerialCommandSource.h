@@ -5,9 +5,10 @@
 #include "communication/SerialPort.h"
 
 /**
- * @brief 从真实串口读取电控命令的预留入口。
+ * @brief 从真实串口读取电控命令。
  *
- * 当前阶段还没有定义 C 板下发命令包解析，因此先保留接口。
+ * 该类负责把协议包转换为主流程可消费的命令字符串，
+ * 自身不推进状态机，也不负责业务处理。
  */
 class SerialCommandSource : public CommandSource {
 public:
