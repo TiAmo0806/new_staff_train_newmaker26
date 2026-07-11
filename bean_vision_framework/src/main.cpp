@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
         AppConfig config = AppConfig::load(config_path);
         std::cout << "Runtime mode: " << config.runtime.mode << "\n";
 
-        InputManager input(config.input);
+        InputManager input(config.input, config.camera);
         BeanNumberDetector detector(config.detector);
         RoiParser parser(config.roi);
         TaskGenerator taskGenerator;

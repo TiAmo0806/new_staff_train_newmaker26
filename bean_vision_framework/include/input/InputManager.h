@@ -7,16 +7,17 @@
 #include <memory>
 
 #ifdef BVP_WITH_MINDVISION
-class MindVisionCamera;
+class CameraManager;
 #endif
 
 class InputManager {
 public:
     /**
      * @brief 构造图像输入管理器。
-     * @param config 输入配置，决定使用 mock、image、video 或 mindvision_camera。
+     * @param input_config 输入配置，决定使用 mock、image、video 或 mindvision_camera。
+     * @param camera_config 相机参数配置。
      */
-    explicit InputManager(const InputConfig& config);
+    InputManager(const InputConfig& input_config, const CameraConfig& camera_config);
 
     /**
      * @brief 析构时释放输入资源。
@@ -49,11 +50,12 @@ public:
     void release();
 
 private:
-    InputConfig config_;
+    InputConfig input_config_;
+    CameraConfig camera_config_;
     cv::VideoCapture cap_;
     cv::Mat image_;
 #ifdef BVP_WITH_MINDVISION
-    std::unique_ptr<MindVisionCamera> mindvision_camera_;
+    std::unique_ptr<CameraManager> camera_manager_;
 #endif
     bool image_sent_ = false;
 };

@@ -42,6 +42,34 @@ std::string stripComment(const std::string& line) {
 }
 
 /**
+ * @brief 去掉配置行中的注释，但保留前导缩进。
+ * @param line 原始配置行。
+ * @return 去掉注释并去掉末尾空白后的字符串。
+ */
+std::string stripCommentKeepIndent(const std::string& line) {
+    const auto pos = line.find('#');
+    std::string kept = pos == std::string::npos ? line : line.substr(0, pos);
+    while (!kept.empty() && std::isspace(static_cast<unsigned char>(kept.back())) != 0) {
+        kept.pop_back();
+    }
+    return kept;
+}
+
+/**
+ * @brief 统计一行前导空白字符数量。
+ * @param line 保留了前导空白的配置行。
+ * @return 前导空白字符个数。
+ */
+int leadingIndent(const std::string& line) {
+    int indent = 0;
+    while (indent < static_cast<int>(line.size()) &&
+           std::isspace(static_cast<unsigned char>(line[static_cast<size_t>(indent)])) != 0) {
+        ++indent;
+    }
+    return indent;
+}
+
+/**
  * @brief 去掉配置值两边的单引号或双引号。
  * @param value 原始配置值。
  * @return 去掉引号后的配置值。
@@ -287,30 +315,39 @@ AppConfig AppConfig::load(const std::string& path) {
     }
 
     std::string section;
+    std::string camera_subsection;
     std::string roi_file = "config/roi.yaml";
     std::string serial_file;
 
         // 解析 app.yaml 的顶层 section，例如 runtime/input/command/detector/roi/serial/debug。
     std::string line;
     while (std::getline(in, line)) {
-        line = stripComment(line);
-        if (line.empty()) {
+        const std::string raw_line = stripCommentKeepIndent(line);
+        const std::string trimmed_line = trim(raw_line);
+        if (trimmed_line.empty()) {
             continue;
         }
 
-        if (!std::isspace(static_cast<unsigned char>(line.front())) && line.back() == ':') {
+        const int indent = leadingIndent(raw_line);
+        if (indent == 0 && trimmed_line.back() == ':') {
             // 没有缩进且以冒号结尾，认为它是一个新 section。
-            section = trim(line.substr(0, line.size() - 1));
+            section = trim(trimmed_line.substr(0, trimmed_line.size() - 1));
+            camera_subsection.clear();
             continue;
         }
 
-        const auto colon = line.find(':');
+        if (section == "camera" && indent > 0 && trimmed_line.back() == ':') {
+            camera_subsection = trim(trimmed_line.substr(0, trimmed_line.size() - 1));
+            continue;
+        }
+
+        const auto colon = trimmed_line.find(':');
         if (colon == std::string::npos) {
             continue;
         }
 
-        const std::string key = trim(line.substr(0, colon));
-        const std::string value = trim(line.substr(colon + 1));
+        const std::string key = trim(trimmed_line.substr(0, colon));
+        const std::string value = trim(trimmed_line.substr(colon + 1));
 
         if (section == "runtime") {
             if (key == "mode") {
@@ -323,22 +360,58 @@ AppConfig AppConfig::load(const std::string& path) {
                 config.input.source = unquote(value);
             } else if (key == "camera_id") {
                 config.input.camera_id = std::stoi(value);
+                config.camera.camera_id = config.input.camera_id;
             }
         } else if (section == "camera") {
             if (key == "camera_id") {
-                config.input.camera_id = std::stoi(value);
+                config.camera.camera_id = std::stoi(value);
+                config.input.camera_id = config.camera.camera_id;
             } else if (key == "width") {
-                config.input.width = std::stoi(value);
+                config.camera.width = std::stoi(value);
             } else if (key == "height") {
-                config.input.height = std::stoi(value);
+                config.camera.height = std::stoi(value);
             } else if (key == "fps") {
-                config.input.fps = std::stoi(value);
+                config.camera.fps = std::stoi(value);
             } else if (key == "exposure") {
-                config.input.exposure = std::stoi(value);
+                config.camera.exposure_time = std::stod(value);
             } else if (key == "gain") {
-                config.input.gain = std::stoi(value);
+                config.camera.gain = std::stod(value);
             } else if (key == "auto_exposure") {
-                config.input.auto_exposure = parseBool(value);
+                config.camera.auto_exposure = parseBool(value);
+            } else if (key == "auto_gain") {
+                config.camera.auto_gain = parseBool(value);
+            } else if (key == "auto_white_balance") {
+                config.camera.auto_white_balance = parseBool(value);
+            } else if (key == "flip_horizontal") {
+                config.camera.flip_horizontal = parseBool(value);
+            } else if (key == "flip_vertical") {
+                config.camera.flip_vertical = parseBool(value);
+            } else if (key == "rotate") {
+                config.camera.rotate = std::stoi(value);
+            } else if (camera_subsection == "exposure") {
+                if (key == "auto") {
+                    config.camera.auto_exposure = parseBool(value);
+                } else if (key == "time") {
+                    config.camera.exposure_time = std::stod(value);
+                }
+            } else if (camera_subsection == "gain") {
+                if (key == "auto") {
+                    config.camera.auto_gain = parseBool(value);
+                } else if (key == "value") {
+                    config.camera.gain = std::stod(value);
+                }
+            } else if (camera_subsection == "white_balance") {
+                if (key == "auto") {
+                    config.camera.auto_white_balance = parseBool(value);
+                }
+            } else if (camera_subsection == "image") {
+                if (key == "flip_horizontal") {
+                    config.camera.flip_horizontal = parseBool(value);
+                } else if (key == "flip_vertical") {
+                    config.camera.flip_vertical = parseBool(value);
+                } else if (key == "rotate") {
+                    config.camera.rotate = std::stoi(value);
+                }
             }
         } else if (section == "command") {
             if (key == "source") {

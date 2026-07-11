@@ -11,9 +11,18 @@ camera:
   width: 1280
   height: 720
   fps: 30
-  exposure: 8000
-  gain: 4
-  auto_exposure: false
+  exposure:
+    auto: false
+    time: 8000
+  gain:
+    auto: false
+    value: 4
+  white_balance:
+    auto: false
+  image:
+    flip_horizontal: false
+    flip_vertical: false
+    rotate: 0
 
 command:
   source: "serial"

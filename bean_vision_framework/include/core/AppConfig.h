@@ -23,12 +23,26 @@ struct InputConfig {
     std::string type = "mock";      // 输入类型：mock / image / video / camera / mindvision_camera。
     std::string source;             // 图片或视频路径。
     int camera_id = 0;              // 摄像头编号，camera 模式下使用。
+};
+
+/**
+ * @brief 工业相机配置。
+ *
+ * CameraManager 和 OpenCV camera 模式都可以复用这份相机参数配置。
+ */
+struct CameraConfig {
+    int camera_id = 0;              // 相机编号。
     int width = 1280;               // 相机宽度，camera/mindvision_camera 模式下使用。
     int height = 720;               // 相机高度。
     int fps = 30;                   // 相机帧率。
-    int exposure = 8000;            // 曝光时间，单位随驱动而定。
-    int gain = 4;                   // 增益。
     bool auto_exposure = false;     // 是否启用自动曝光。
+    double exposure_time = 8000.0;  // 曝光时间，单位微秒。
+    bool auto_gain = false;         // 是否启用自动增益，当前最小实现下仅保留配置语义。
+    double gain = 4.0;              // 模拟增益放大倍数。
+    bool auto_white_balance = false; // 是否启用自动白平衡。
+    bool flip_horizontal = false;   // 输出图像是否水平翻转。
+    bool flip_vertical = false;     // 输出图像是否垂直翻转。
+    int rotate = 0;                 // 输出图像旋转角度：0/90/180/270。
 };
 
 /**
@@ -123,6 +137,7 @@ struct DebugConfig {
 struct AppConfig {
     RuntimeConfig runtime;          // 运行模式配置。
     InputConfig input;              // 图像输入配置。
+    CameraConfig camera;            // 相机参数配置。
     CommandConfig command;          // 命令来源配置。
     ScanConfig scan;                // 多帧扫描配置。
     DetectorConfig detector;        // 检测器配置。

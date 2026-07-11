@@ -65,6 +65,7 @@ file(GLOB_RECURSE PROJECT_SOURCES CONFIGURE_DEPENDS
 add_executable(bean_vision_framework ${PROJECT_SOURCES})
 add_executable(camera_preview_demo
     tools/camera_preview_demo/main.cpp
+    src/camera/CameraManager.cpp
     src/core/AppConfig.cpp
     src/core/DetectionTypes.cpp
     src/input/InputManager.cpp

@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
     }
 
     AppConfig config = AppConfig::load(config_path);
-    InputManager input(config.input);
+    InputManager input(config.input, config.camera);
     if (!input.open()) {
         std::cerr << "Input open failed.\n";
         return 1;
