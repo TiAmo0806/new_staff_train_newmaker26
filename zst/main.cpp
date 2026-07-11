@@ -8,14 +8,13 @@
  */
 
 #include "/home/zst/zst/include/CameraDriver/MindVisionCamera.h"
-#include "Communication/VisionProtocol.h"
-#include "ImgProcessing/FieldStateCollector.h"
+#include "/home/zst/zst/include/Communication/VisionProtocol.h"
+#include "/home/zst/zst/include/ImgProcessing/CompetitionWorkflow.h"
 #include "/home/zst/zst/include/Communication/VirtualSerial.h"
 #include "/home/zst/zst/include/ImgProcessing/VisionSystem.h"
 #include "/home/zst/zst/include/Tool/Utils.h"
 #include <iostream>
 #include <opencv2/highgui.hpp>
-#include <opencv2/videoio.hpp>
 #include <string>
 
 int main(int argc, char **argv)
@@ -53,27 +52,19 @@ int main(int argc, char **argv)
     //   SVM 豆子二次分类；
     //   TaskPlanner 比赛规则决策。
     //
-    // VirtualSerial 目前只占住通信流程。
-    // 电控协议字段没定之前，payload 保持为空。
+    // VirtualSerial 负责统一的可变长度封帧、CRC 和 Linux 串口写入。
     VisionSystem vision(config.vision);
     VirtualSerial serial(config.serial);
     if (!serial.openPort())
     {
-        std::cerr << "[Main] 串口打开失败，切换模拟发送" << std::endl;
+        std::cerr << "[Main] 串口打开失败，发送时将尝试扫描设备并重连" << std::endl;
     }
 
-    // 多角度识别收集器：
-    // 1) 每个角度连续统计 20 帧，避免单帧误识别直接保存。
-    // 2) 当前角度内部按画面从左到右排序。
-    // 3) 已经保存过的豆子/数字会跳过，不会重复占用下一个位置。
-    // 4) 先收集 3 个豆子位置，再收集 5 个数字箱位置，完成后一次性发给电控。
-    FieldStateCollectorConfig collectorConfig;
-    collectorConfig.voteFramesPerAngle = 20;
-    collectorConfig.minHitsPerAngle = 6;
-    FieldStateCollector collector(collectorConfig);
-    bool fieldStateSent = false;
+    // 两队共用识别算法、协议编码和物理串口，只切换上层流程状态机。
+    // TeamA：全部数字 -> 通知 -> 全部豆子 -> 通知 -> 完整结果。
+    // TeamB：第1个豆子 -> 全部数字 -> 第1个匹配 -> 后续豆子逐个匹配。
+    CompetitionWorkflow workflow(config.workflow);
 
-    cv::VideoWriter writer;
     const std::string windowName = "Logistics Vision";
     if (config.showWindow) cv::namedWindow(windowName, cv::WINDOW_NORMAL);
 
@@ -95,37 +86,17 @@ int main(int argc, char **argv)
         // result.debugImage：画好框和文字的调试图。
         VisionFrameResult result = vision.process(frame);
 
-        // 6. 多角度收集并在完成后一次性发送。
-        // 豆子阶段：两个角度都可以连续扫，收集器会跳过重复豆子。
-        // 箱子阶段：三个角度都可以连续扫，收集器会跳过重复数字。
-        // 完整 payload：
-        //   valid bean1 bean2 bean3 boxA boxB boxC boxD boxE
-        if (!collector.beanReady())
+        // 6. 当前队伍工作流决定“这一帧是否产生阶段消息”。
+        // update只处理识别顺序和生成消息，不直接操作串口，因此TeamA/B流程可以独立测试。
+        // 单向模式不等待电控 ACK；sendPacket内部只保证尝试把字节写入Linux串口，
+        // 写成功并不能证明C板已经收到或完成运动。
+        const std::vector<VisionTxPacket> packets = workflow.update(result.detections);
+        for (const VisionTxPacket &tx : packets)
         {
-            AngleCommitResult commit = collector.addBeanFrame(result.detections);
-            if (commit.committed)
-            {
-                std::cout << "[Main] 豆子角度投票完成，新增 "
-                          << commit.addedCount << " 个，当前 "
-                          << collector.beanCount() << "/3" << std::endl;
-            }
-        }
-        else if (!collector.boxReady())
-        {
-            AngleCommitResult commit = collector.addBoxFrame(result.detections);
-            if (commit.committed)
-            {
-                std::cout << "[Main] 数字箱角度投票完成，新增 "
-                          << commit.addedCount << " 个，当前 "
-                          << collector.boxCount() << "/5" << std::endl;
-            }
-        }
-        else if (!fieldStateSent)
-        {
-            VisionTxPacket tx = buildFieldStatePacket(collector.state());
-            serial.sendPacket(tx);
-            fieldStateSent = true;
-            std::cout << "[Main] 完整场地状态已发送给电控" << std::endl;
+            // TeamA豆子阶段完成时packets包含两帧：BeansComplete和FinalResult，
+            // 这里按vector顺序逐帧发送，完整字节不会相互交叉。
+            if (!serial.sendPacket(tx))
+                std::cerr << "[Main] 工作流消息发送失败" << std::endl;
         }
 
         // 7. 调试窗口显示。
@@ -136,6 +107,9 @@ int main(int argc, char **argv)
             cv::imshow(windowName, result.debugImage);
             int key = cv::waitKey(1);
             if (key == 27 || key == 'q' || key == 'Q') break;
+            // 调试时按 1/2 可切换队伍。切换会清空旧识别缓存并开始新会话。
+            if (key == '1') workflow.switchMode(TeamMode::TeamA);
+            if (key == '2') workflow.switchMode(TeamMode::TeamB);
         }
     }
 

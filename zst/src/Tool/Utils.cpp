@@ -64,6 +64,21 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
             if (r["log_dir"]) config.logDir = r["log_dir"].as<std::string>();
             if (r["terminal_line_limit"]) config.terminalLineLimit = r["terminal_line_limit"].as<int>();
         }
+        if (y["workflow"])
+        {
+            auto w = y["workflow"];
+            if (w["team_mode"])
+            {
+                const std::string mode = w["team_mode"].as<std::string>();
+                config.workflow.mode = mode == "team_b" ? TeamMode::TeamB : TeamMode::TeamA;
+            }
+            if (w["vote_frames_per_stage"])
+                config.workflow.voteFramesPerStage = w["vote_frames_per_stage"].as<int>();
+            if (w["min_hits_per_stage"])
+                config.workflow.minHitsPerStage = w["min_hits_per_stage"].as<int>();
+            if (w["session_id"])
+                config.workflow.sessionId = static_cast<uint8_t>(w["session_id"].as<int>());
+        }
         if (y["planner"])
         {
             auto p = y["planner"];
@@ -77,4 +92,3 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
         return false;
     }
 }
-

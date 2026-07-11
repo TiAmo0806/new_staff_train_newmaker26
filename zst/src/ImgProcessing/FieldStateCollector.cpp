@@ -1,4 +1,4 @@
-#include "ImgProcessing/FieldStateCollector.h"
+#include "/home/zst/zst/include/ImgProcessing/FieldStateCollector.h"
 #include <algorithm>
 
 namespace
@@ -174,6 +174,15 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
 
     for (const auto &candidate : candidates)
     {
+        // 队伍B要求一次只确认一个新豆子。限制在这里实现后，
+        // 即使同一画面同时出现多个豆子，也只保存排序后的第一个新类别；
+        // 其余候选不会丢失为永久结果，而是在下一个观察阶段重新累计20帧再判断。
+        if (config_.maxNewBeansPerCommit > 0 &&
+            result.addedCount >= config_.maxNewBeansPerCommit)
+        {
+            break;
+        }
+
         // 如果这种豆子之前已经保存过，说明这是多角度重叠识别，跳过。
         if (seenBeans_[candidate.id])
         {

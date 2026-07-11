@@ -5,6 +5,7 @@ namespace crc16
 {
 uint16_t Calc(const uint8_t *data, int length)
 {
+    // 逐字节、逐位计算 Modbus CRC16。算法双方必须使用相同初值、多项式和字节序。
     uint16_t crc = 0xFFFF;
     for (int i = 0; i < length; ++i)
     {
@@ -17,6 +18,7 @@ uint16_t Calc(const uint8_t *data, int length)
 
 void Append(uint8_t *data, int length)
 {
+    // length 是“含两个 CRC 占位字节”的总帧长，因此实际参与计算的是 length - 2。
     if (length < 2) return;
     uint16_t crc = Calc(data, length - 2);
     data[length - 2] = static_cast<uint8_t>(crc & 0xFF);
@@ -25,10 +27,10 @@ void Append(uint8_t *data, int length)
 
 bool Verify(const uint8_t *data, int length)
 {
+    // 协议按小端发送 CRC：先低 8 位，再高 8 位。
     if (length < 2) return false;
     uint16_t expected = static_cast<uint16_t>(data[length - 2]) |
                         (static_cast<uint16_t>(data[length - 1]) << 8);
     return expected == Calc(data, length - 2);
 }
 }
-

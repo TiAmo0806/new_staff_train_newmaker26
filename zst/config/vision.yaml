@@ -4,19 +4,28 @@ camera:
   auto_exposure: true
 
 model:
-  onnx_path: "/home/zst/zst/best.onnx"
-  svm_path: "/home/zst/bean_svm.yml"
-  input_width: 640
-  input_height: 640
-  confidence: 0.35
-  nms_iou: 0.20
-  use_svm: true
+  onnx_path: "/home/zst/zst/best.onnx" # YOLOv8 导出的 ONNX，不是训练用的 .pt
+  svm_path: "/home/zst/bean_svm.yml"   # 豆子二次分类模型；文件不存在时会退回纯 YOLO
+  input_width: 640                      # 必须与 ONNX 导出时的 imgsz/输入宽度一致
+  input_height: 640                     # 必须与 ONNX 导出时的 imgsz/输入高度一致
+  confidence: 0.35                      # 类别置信度阈值：越高误检越少、漏检可能越多
+  nms_iou: 0.20                         # 同类框 NMS IoU 阈值：越低去重越严格
+  use_svm: true                         # 是否用 SVM 覆盖 YOLO 给出的豆子类别
 
 serial:
-  port: "/dev/ttyACM0"
-  baudrate: 115200
-  simulated: true
-  tx_log: true
+  port: "/dev/ttyACM0"                 # STM32 CDC 常见为 ttyACM，USB转串口常见为 ttyUSB
+  baudrate: 115200                      # 当前 C++ 实现固定为 115200-8-N-1
+  simulated: true                       # true只打印不发送；接上电控实测时改为 false
+  tx_log: true                          # 打印 A6...CRC 的完整十六进制发送帧
+
+# 两个队伍使用不同 C 板、不同时间上场，但共用视觉程序和物理串口。
+# team_a：全部数字 -> 全部豆子 -> 最终完整结果。
+# team_b：第1豆子 -> 全部数字 -> 第1匹配 -> 后续豆子逐个匹配。
+workflow:
+  team_mode: "team_a"                  # 切换为 team_b 即使用第二队流程
+  vote_frames_per_stage: 20            # 每个阶段累计多少帧后投票
+  min_hits_per_stage: 6                # 目标至少命中多少帧才算稳定
+  session_id: 1                        # 范围1~255；每次重新比赛建议修改，运行时切换自动递增
 
 runtime:
   show_window: true
@@ -27,5 +36,3 @@ runtime:
 planner:
   # 规则：黄豆->1，绿豆->2，白芸豆->3，4/5 为空箱。
   min_stable_frames: 3       #数字目标连续检测
-
-

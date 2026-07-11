@@ -1,46 +1,52 @@
-#include "Communication/VisionProtocol.h"
+#include "/home/zst/zst/include/Communication/VisionProtocol.h"
+#include <stdexcept>
 
-VisionTxPacket buildFieldStatePacket(const FieldState &state)
+namespace
 {
-    // VisionTxPacket 里只放 payload。
-    // 帧头 0xA6 和 CRC16 不在这里加，交给 VirtualSerial::sendPacket 统一处理。
+// 修改协议字段含义或布局时应递增版本，让C板能拒绝不兼容的旧/新帧。
+constexpr uint8_t PROTOCOL_VERSION = 1;
+}
+
+VisionTxPacket buildWorkflowPacket(TeamMode team,
+                                   VisionMessageType type,
+                                   uint8_t session,
+                                   uint8_t sequence,
+                                   const std::vector<uint8_t> &data)
+{
+    // DATA_LENGTH只有1字节，所以单条消息最多携带255字节业务数据。
+    if (data.size() > 255)
+        throw std::length_error("workflow packet data exceeds 255 bytes");
+
     VisionTxPacket packet;
-
-    // payload 格式：
-    // byte0: valid，1 表示 3 个豆子位置和 5 个箱子位置都识别完成
-    // byte1: bean_place_1，0未知，1黄豆，2绿豆，3白芸豆
-    // byte2: bean_place_2
-    // byte3: bean_place_3
-    // byte4: box_place_a，0未知，1~5表示识别到的数字
-    // byte5: box_place_b
-    // byte6: box_place_c
-    // byte7: box_place_d
-    // byte8: box_place_e
-    packet.payload.reserve(9);
-
-    // byte0：整场结果是否有效。
-    // valid=1 表示豆子和箱子都已经识别完成；
-    // valid=0 表示当前发送的是不完整结果，电控一般不应执行。
-    packet.payload.push_back(state.valid() ? 1 : 0);
-
-    // byte1~byte3：三个豆子位置。
-    for (BeanType bean : state.beanPlaces)
-    {
-        packet.payload.push_back(encodeBeanType(bean));
-    }
-
-    // byte4~byte8：五个箱子位置。
-    for (int digit : state.boxPlaces)
-    {
-        if (digit >= 1 && digit <= 5)
-        {
-            packet.payload.push_back(static_cast<uint8_t>(digit));
-        }
-        else
-        {
-            packet.payload.push_back(0);
-        }
-    }
-
+    // 这里不放0xA6和CRC；它们由VirtualSerial统一添加。
+    // payload的6个固定字段依次为版本、队伍、类型、会话、序号、DATA长度。
+    packet.payload.reserve(6 + data.size());
+    packet.payload.push_back(PROTOCOL_VERSION);
+    packet.payload.push_back(static_cast<uint8_t>(team));
+    packet.payload.push_back(static_cast<uint8_t>(type));
+    packet.payload.push_back(session);
+    packet.payload.push_back(sequence);
+    packet.payload.push_back(static_cast<uint8_t>(data.size()));
+    packet.payload.insert(packet.payload.end(), data.begin(), data.end());
     return packet;
+}
+
+const char *teamModeToString(TeamMode mode)
+{
+    // 仅用于日志显示，不会把字符串发送到C板。
+    return mode == TeamMode::TeamB ? "team_b" : "team_a";
+}
+
+const char *visionMessageTypeToString(VisionMessageType type)
+{
+    // 仅用于终端日志，线路上发送的是VisionMessageType对应的uint8_t数值。
+    switch (type)
+    {
+    case VisionMessageType::DigitsComplete: return "digits_complete";
+    case VisionMessageType::BeansComplete: return "beans_complete";
+    case VisionMessageType::BeanDetected: return "bean_detected";
+    case VisionMessageType::BeanDigitMatch: return "bean_digit_match";
+    case VisionMessageType::FinalResult: return "final_result";
+    default: return "unknown";
+    }
 }

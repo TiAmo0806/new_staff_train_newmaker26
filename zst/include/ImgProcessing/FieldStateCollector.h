@@ -1,8 +1,8 @@
 #ifndef FIELD_STATE_COLLECTOR_H
 #define FIELD_STATE_COLLECTOR_H
 
-#include "ImgProcessing/FieldState.h"
-#include "ImgProcessing/VisionTypes.h"
+#include "/home/zst/zst/include/ImgProcessing/FieldState.h"
+#include "/home/zst/zst/include/ImgProcessing/VisionTypes.h"
 #include <array>
 #include <vector>
 
@@ -16,6 +16,11 @@ struct FieldStateCollectorConfig
     // 某个类别在当前角度至少出现多少帧才可信。
     // 例如 20 帧里至少出现 6 帧，才会被加入本角度结果。
     int minHitsPerAngle = 6;
+
+    // 每次豆子角度提交最多接受几个“新豆子”。
+    // 队伍A一次可能看到多个豆子，使用3；队伍B要求“识别一个、发送一个”，使用1。
+    // 这个限制只影响豆子，不影响数字箱；小于等于0表示不限制。
+    int maxNewBeansPerCommit = 3;
 };
 
 struct AngleCommitResult

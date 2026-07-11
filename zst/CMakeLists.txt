@@ -104,6 +104,7 @@ set(ALL_SOURCES
     src/Communication/VirtualSerial.cpp
     src/Communication/VisionProtocol.cpp
     src/ImgProcessing/BeanSvmClassifier.cpp
+    src/ImgProcessing/CompetitionWorkflow.cpp
     src/ImgProcessing/FieldStateCollector.cpp
     src/ImgProcessing/TaskPlanner.cpp
     src/ImgProcessing/VisionTypes.cpp
