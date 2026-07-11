@@ -1,2 +1,0 @@
- ./run.sh --simulate//运行全部节点
- chmod +x run.sh//获取权限
