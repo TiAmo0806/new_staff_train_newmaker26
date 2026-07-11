@@ -153,6 +153,28 @@ public:
      */
     bool TryReconnect();
 
+    /**
+     * @brief 设置串口波特率（下次 Open 时生效）
+     * @param baudRate 波特率 (如 9600, 115200, 921600)
+     */
+    void SetBaudRate(int baudRate) { baudRate_ = baudRate; }
+
+    /**
+     * @brief 设置发送重试间隔（微秒）
+     * @param intervalUs 重试间隔，默认 1000
+     */
+    void SetRetryIntervalUs(int intervalUs) { retryIntervalUs_ = intervalUs; }
+
+    /**
+     * @brief 设置自动重连参数
+     * @param maxWaitMs  最大等待时间（毫秒）
+     * @param intervalMs 轮询间隔（毫秒）
+     */
+    void SetReconnectParams(int maxWaitMs, int intervalMs) {
+        reconnectMaxWaitMs_  = maxWaitMs;
+        reconnectIntervalMs_ = intervalMs;
+    }
+
 private:
     /**
      * @brief 配置串口参数
@@ -171,6 +193,10 @@ private:
     bool simulated_ = false;    // 模拟模式标志
     bool txLogEnabled_ = false; // 是否输出发送日志
     bool autoReconnect_ = true; // 自动重连标志
+    int  baudRate_            = 115200;   // 串口波特率
+    int  retryIntervalUs_     = 1000;     // 发送重试间隔（微秒）
+    int  reconnectMaxWaitMs_  = 5000;     // 重连最大等待（毫秒）
+    int  reconnectIntervalMs_ = 200;      // 重连轮询间隔（毫秒）
 };
 
 #endif // VIRTUAL_SERIAL_H

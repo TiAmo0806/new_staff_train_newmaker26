@@ -16,11 +16,12 @@
 //  工业相机上下文
 // ============================================================
 struct CameraCtx {
-    CameraHandle    hCamera   = -1;
-    unsigned char*  rgbBuffer = nullptr;
-    int             width     = 0;
-    int             height    = 0;
-    int             channel   = 3;  // BGR8 = 3 通道
+    CameraHandle    hCamera         = -1;
+    unsigned char*  rgbBuffer       = nullptr;
+    int             width           = 0;
+    int             height          = 0;
+    int             channel         = 3;    // BGR8 = 3 通道
+    int             frameTimeoutMs  = 1000; // 取帧超时（毫秒）
 };
 
 // ============================================================

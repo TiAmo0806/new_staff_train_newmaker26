@@ -22,6 +22,47 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
+// ============================================================
+//  波特率 int → speed_t 转换
+// ============================================================
+static speed_t getBaudRateConstant(int baud)
+{
+    switch (baud) {
+        case 0:       return B0;
+        case 50:      return B50;
+        case 75:      return B75;
+        case 110:     return B110;
+        case 134:     return B134;
+        case 150:     return B150;
+        case 200:     return B200;
+        case 300:     return B300;
+        case 600:     return B600;
+        case 1200:    return B1200;
+        case 1800:    return B1800;
+        case 2400:    return B2400;
+        case 4800:    return B4800;
+        case 9600:    return B9600;
+        case 19200:   return B19200;
+        case 38400:   return B38400;
+        case 57600:   return B57600;
+        case 115200:  return B115200;
+        case 230400:  return B230400;
+        case 460800:  return B460800;
+        case 500000:  return B500000;
+        case 576000:  return B576000;
+        case 921600:  return B921600;
+        case 1000000: return B1000000;
+        case 1152000: return B1152000;
+        case 1500000: return B1500000;
+        case 2000000: return B2000000;
+        case 2500000: return B2500000;
+        case 3000000: return B3000000;
+        case 3500000: return B3500000;
+        case 4000000: return B4000000;
+        default:      return B115200;
+    }
+}
+
 VirtualSerial::VirtualSerial(const std::string &portName)
     : serialFd_(-1), portName_(portName)
 {
@@ -112,7 +153,7 @@ bool VirtualSerial::sendBeanPosition(uint8_t leftBean, uint8_t midBean, uint8_t 
         if (write(serialFd_, frame, PACKET_SIZE) == static_cast<ssize_t>(PACKET_SIZE))
             return true;
         if (retry < maxRetries - 1)
-            usleep(1000);
+            usleep(retryIntervalUs_);
     }
 
     std::cerr << "[VirtualSerial] Error : Failed to send command after " << maxRetries << " retries" << std::endl;
@@ -169,7 +210,7 @@ bool VirtualSerial::sendNumber(uint8_t digit, int maxRetries)
         if (write(serialFd_, frame, NUMBER_PACKET_SIZE) == static_cast<ssize_t>(NUMBER_PACKET_SIZE))
             return true;
         if (retry < maxRetries - 1)
-            usleep(1000);
+            usleep(retryIntervalUs_);
     }
 
     std::cerr << "[VirtualSerial] Error : Failed to send number after " << maxRetries << " retries" << std::endl;
@@ -226,7 +267,7 @@ bool VirtualSerial::sendMatchSignal(uint8_t signal, int maxRetries)
         if (write(serialFd_, frame, MATCH_PACKET_SIZE) == static_cast<ssize_t>(MATCH_PACKET_SIZE))
             return true;
         if (retry < maxRetries - 1)
-            usleep(1000);
+            usleep(retryIntervalUs_);
     }
 
     std::cerr << "[VirtualSerial] Error : Failed to send match signal after " << maxRetries << " retries" << std::endl;
@@ -262,8 +303,9 @@ bool VirtualSerial::ConfigurePort()
     }
 
     // 波特率设置
-    cfsetispeed(&tty, B115200);
-    cfsetospeed(&tty, B115200);
+    speed_t baudConst = getBaudRateConstant(baudRate_);
+    cfsetispeed(&tty, baudConst);
+    cfsetospeed(&tty, baudConst);
 
     // 控制模式标志
     tty.c_cflag &= ~PARENB; // 无校验
@@ -335,15 +377,13 @@ bool VirtualSerial::TryReconnect()
     Close();
 
     // 等待设备节点重新出现（MCU 复位后 USB 重新枚举需要时间）
-    constexpr int kMaxWaitMs = 5000;
-    constexpr int kIntervalMs = 200;
     std::string newPort;
-    for (int waited = 0; waited < kMaxWaitMs; waited += kIntervalMs)
+    for (int waited = 0; waited < reconnectMaxWaitMs_; waited += reconnectIntervalMs_)
     {
         newPort = FindAvailablePort();
         if (!newPort.empty())
             break;
-        usleep(kIntervalMs * 1000);
+        usleep(reconnectIntervalMs_ * 1000);
     }
 
     if (newPort.empty())

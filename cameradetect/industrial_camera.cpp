@@ -100,7 +100,7 @@ bool captureIndustrialFrame(CameraCtx& ctx, cv::Mat& frame)
     BYTE*         pbyBuffer = nullptr;
 
     CameraSdkStatus status = CameraGetImageBuffer(
-        ctx.hCamera, &frameInfo, &pbyBuffer, 1000);
+        ctx.hCamera, &frameInfo, &pbyBuffer, ctx.frameTimeoutMs);
 
     if (status != CAMERA_STATUS_SUCCESS) {
         std::cerr << "[WARN] CameraGetImageBuffer 超时或失败, status="

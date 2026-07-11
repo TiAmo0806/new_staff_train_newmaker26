@@ -177,6 +177,11 @@ int main(int argc, char** argv)
     // ---- 初始化串口通信 ----
     VirtualSerial serial(serialPort);
     serial.SetTxLogEnabled(true);
+    serial.SetBaudRate(cfg.serialBaudRate);
+    serial.SetRetryIntervalUs(cfg.serialRetryIntervalUs);
+    serial.SetReconnectParams(cfg.serialReconnectMaxWaitMs,
+                              cfg.serialReconnectIntervalMs);
+    serial.SetAutoReconnect(cfg.serialAutoReconnect);
     if (!serial.Open()) {
         std::cerr << "[WARN] 串口打开失败，将进入模拟模式（不发送）\n";
         serial.SetSimulated(true);
@@ -190,7 +195,8 @@ int main(int argc, char** argv)
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "BeanNumberDetector");
     Ort::SessionOptions sessionOptions;
     sessionOptions.SetIntraOpNumThreads(cfg.numThreads);
-    sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    sessionOptions.SetGraphOptimizationLevel(
+        static_cast<GraphOptimizationLevel>(cfg.graphOptimizationLevel));
 
     std::cout << "[INFO] 推理后端: CPU, 线程数: " << cfg.numThreads << std::endl;
 
@@ -249,6 +255,7 @@ int main(int argc, char** argv)
     if (useIndustrialCamera) {
         int camIndex = std::stoi(videoSource);
         std::cout << "[INFO] 使用工业相机, 索引: " << camIndex << std::endl;
+        camCtx.frameTimeoutMs = cfg.cameraFrameTimeoutMs;
         if (!initIndustrialCamera(camIndex, camCtx)) {
             std::cerr << "[ERROR] 工业相机初始化失败" << std::endl;
             return -1;
@@ -271,35 +278,14 @@ int main(int argc, char** argv)
     std::vector<double> latencyRing(30, 0.0);
     size_t ringIdx = 0;
 
-    // ---- 大循环状态机 ----
-    // cyclePhase: 0=比较最右侧豆子, 1=比较中间豆子, 2=比较最左侧豆子
-    // 初始为 2，首次检测到3类豆子后设为 0（右）
-    int cyclePhase = 2;
-    uint8_t targetRightNum = 0;   // 最右侧豆子对应的数字
-    uint8_t targetMidNum   = 0;   // 中间豆子对应的数字
-    uint8_t targetLeftNum  = 0;   // 最左侧豆子对应的数字
-    bool beansRecorded = false;   // 当前循环是否已记录豆子信息
-    // 用于检测豆子配置变化（避免帧间重复触发）
-    uint8_t lastRecordedRight = 0xFF, lastRecordedMid = 0xFF, lastRecordedLeft = 0xFF;
-
-    // ---- 小循环结束条件：发送信息1 + 检测到3箱豆子 ----
-    bool signal1Sent = false;           // 当前小循环是否已发送信息1（匹配信号）
-    bool waitingForBeanConfirm = false; // 等待3箱豆子检测以确认小循环完成
-
-    // ---- 稳定化相关（第一次大循环中，第二次小循环起生效） ----
-    static const int STABLE_THRESHOLD = 10;  // 连续相同帧阈值
-    int  stableFrameCount = 0;
-    bool inStabilization  = false;
-
-    // 基线（第一次小循环的识别结果，后续小循环与之比对）
-    uint8_t baselineRightNum = 0xFF, baselineMidNum = 0xFF, baselineLeftNum = 0xFF;
-    bool    baselineEstablished = false;
-
-    // 待稳定的识别结果
-    uint8_t pendingRightNum = 0xFF, pendingMidNum = 0xFF, pendingLeftNum = 0xFF;
-
-    // 是否处于当前大循环的第一次小循环
-    bool isFirstSmallCycle = true;
+    // ---- 简化状态：记录豆子位置，按右→中→左顺序匹配数字 ----
+    bool     beansRecorded        = false;   // 是否已记录3箱豆子位置
+    int      cyclePhase           = 0;       // 0=右, 1=中, 2=左
+    uint8_t  targetRightNum       = 0;       // 右侧豆子对应箱号
+    uint8_t  targetMidNum         = 0;       // 中间豆子对应箱号
+    uint8_t  targetLeftNum        = 0;       // 左侧豆子对应箱号
+    bool     waitingForBeanConfirm = false;  // 匹配成功后等待3箱豆子确认
+    bool     matchingDone         = false;   // 三轮全部完成
 
     // ---- 主循环 ----
     cv::Mat frame;
@@ -355,166 +341,55 @@ int main(int argc, char** argv)
         // 4. 计算三厢豆子位置 (左/中/右)
         BeanPositionResult pos = computeBeanPositions(dets, frame.cols);
 
-        // 5. 大循环状态机
-        //    识别到3类豆子 → 记录右中左豆子数字 → 推进循环相位
-        //    识别到数字 → 选离画面中心最近的 → 与目标位置数字比较 → 发送1/0
+        // 5. 简化逻辑：
+        //    首次3箱豆子 → 记录位置 → 匹配右豆数字 → 发信号1
+        //    再次3箱豆子 → 匹配中豆数字 → 发信号1
+        //    再次3箱豆子 → 匹配左豆数字 → 发信号1
+        //    三轮完成后不退出，仅不再匹配
         bool hasValidPosition = (pos.leftBean != 0xFF ||
                                  pos.midBean != 0xFF ||
                                  pos.rightBean != 0xFF);
 
-        // ---- 5a. 3箱豆子检测：首次记录 / 小循环确认 / 稳定化 ----
-        if (hasValidPosition) {
-            // --- 辅助 lambda：将当前位置记录为最终结果 ---
-            auto recordPositions = [&](const BeanPositionResult& p) {
-                targetRightNum = p.rightNum;
-                targetMidNum   = p.midNum;
-                targetLeftNum  = p.leftNum;
-                beansRecorded  = true;
+        // ---- 5a. 首次检测到3箱豆子：记录位置 ----
+        if (!beansRecorded && hasValidPosition) {
+            targetRightNum = pos.rightNum;
+            targetMidNum   = pos.midNum;
+            targetLeftNum  = pos.leftNum;
+            beansRecorded  = true;
+            cyclePhase     = 0;
+            waitingForBeanConfirm = false;
 
-                lastRecordedRight = p.rightNum;
-                lastRecordedMid   = p.midNum;
-                lastRecordedLeft  = p.leftNum;
-            };
+            std::cout << "[INFO] 豆子位置已记录"
+                      << " | 右→箱" << static_cast<int>(targetRightNum)
+                      << " | 中→箱" << static_cast<int>(targetMidNum)
+                      << " | 左→箱" << static_cast<int>(targetLeftNum) << std::endl;
+        }
 
-            // --- 辅助 lambda：更新基线 ---
-            auto updateBaseline = [&](const BeanPositionResult& p) {
-                baselineRightNum = p.rightNum;
-                baselineMidNum   = p.midNum;
-                baselineLeftNum  = p.leftNum;
-                baselineEstablished = true;
-            };
+        // ---- 5b. 匹配成功后的3箱确认：推进到下一阶段 ----
+        if (waitingForBeanConfirm && hasValidPosition) {
+            waitingForBeanConfirm = false;
+            cyclePhase++;
 
-            // --- 辅助 lambda：比较当前位置是否与基线相同 ---
-            auto matchesBaseline = [&](const BeanPositionResult& p) -> bool {
-                return baselineEstablished &&
-                       p.rightNum == baselineRightNum &&
-                       p.midNum  == baselineMidNum &&
-                       p.leftNum == baselineLeftNum;
-            };
-
-            // ========================================================
-            // 情况1：首次识别 —— 记录位置作为基线，不推进循环相位
-            // ========================================================
-            if (!beansRecorded) {
-                recordPositions(pos);
-                updateBaseline(pos);
-                isFirstSmallCycle = true;
-                cyclePhase = 0;   // 从最右侧开始比较
-
-                const char* phaseName[3] = {"右", "中", "左"};
-                std::cout << "[INFO] 首次识别 —— 记录基线"
-                          << " | Phase " << cyclePhase
-                          << " (" << phaseName[cyclePhase] << ")"
-                          << " | 右箱数字=" << static_cast<int>(targetRightNum)
-                          << " 中箱数字=" << static_cast<int>(targetMidNum)
-                          << " 左箱数字=" << static_cast<int>(targetLeftNum) << std::endl;
-            }
-            // ========================================================
-            // 情况2：小循环确认 —— 信息1已发送 + 检测到3箱豆子
-            // ========================================================
-            else if (waitingForBeanConfirm && signal1Sent) {
-                waitingForBeanConfirm = false;
-                signal1Sent = false;
-
-                if (isFirstSmallCycle) {
-                    // 第一次小循环结束：直接记录新位置，更新基线
-                    recordPositions(pos);
-                    updateBaseline(pos);
-                    isFirstSmallCycle = false;
-                    cyclePhase = (cyclePhase + 1) % 3;
-
-                    const char* phaseName[3] = {"右", "中", "左"};
-                    std::cout << "[INFO] 第1次小循环完成 → Phase " << cyclePhase
-                              << " (" << phaseName[cyclePhase] << ")"
-                              << " | 新基线: 右=" << static_cast<int>(pos.rightNum)
-                              << " 中=" << static_cast<int>(pos.midNum)
-                              << " 左=" << static_cast<int>(pos.leftNum) << std::endl;
-                } else {
-                    // 非第一次小循环：与基线比对
-                    if (matchesBaseline(pos)) {
-                        // 与基线一致 → 直接推进
-                        recordPositions(pos);
-                        updateBaseline(pos);
-                        cyclePhase = (cyclePhase + 1) % 3;
-
-                        const char* phaseName[3] = {"右", "中", "左"};
-                        std::cout << "[INFO] 与基线一致，直接推进 → Phase " << cyclePhase
-                                  << " (" << phaseName[cyclePhase] << ")"
-                                  << " | 右=" << static_cast<int>(pos.rightNum)
-                                  << " 中=" << static_cast<int>(pos.midNum)
-                                  << " 左=" << static_cast<int>(pos.leftNum) << std::endl;
-                    } else {
-                        // 与基线不一致 → 进入稳定化
-                        pendingRightNum = pos.rightNum;
-                        pendingMidNum  = pos.midNum;
-                        pendingLeftNum = pos.leftNum;
-                        stableFrameCount = 1;
-                        inStabilization  = true;
-
-                        std::cout << "[INFO] 与基线不一致，进入稳定化 (1/" << STABLE_THRESHOLD
-                                  << ") 基线: 右=" << static_cast<int>(baselineRightNum)
-                                  << " 中=" << static_cast<int>(baselineMidNum)
-                                  << " 左=" << static_cast<int>(baselineLeftNum)
-                                  << " | 当前: 右=" << static_cast<int>(pos.rightNum)
-                                  << " 中=" << static_cast<int>(pos.midNum)
-                                  << " 左=" << static_cast<int>(pos.leftNum) << std::endl;
-                    }
-                }
-            }
-            // ========================================================
-            // 情况3：稳定化中 —— 等待连续 STABLE_THRESHOLD 帧一致
-            // ========================================================
-            else if (inStabilization) {
-                if (pos.rightNum == pendingRightNum &&
-                    pos.midNum  == pendingMidNum &&
-                    pos.leftNum == pendingLeftNum) {
-                    stableFrameCount++;
-                    std::cout << "[INFO] 稳定化中 " << stableFrameCount
-                              << "/" << STABLE_THRESHOLD << std::endl;
-                    if (stableFrameCount >= STABLE_THRESHOLD) {
-                        // 稳定化完成：使用待定结果，更新基线
-                        BeanPositionResult stabilized;
-                        stabilized.rightNum = pendingRightNum;
-                        stabilized.midNum   = pendingMidNum;
-                        stabilized.leftNum  = pendingLeftNum;
-                        recordPositions(stabilized);
-                        updateBaseline(stabilized);
-                        inStabilization = false;
-                        cyclePhase = (cyclePhase + 1) % 3;
-
-                        const char* phaseName[3] = {"右", "中", "左"};
-                        std::cout << "[INFO] 稳定化完成！新基线已更新 → Phase " << cyclePhase
-                                  << " (" << phaseName[cyclePhase] << ")"
-                                  << " | 右=" << static_cast<int>(pendingRightNum)
-                                  << " 中=" << static_cast<int>(pendingMidNum)
-                                  << " 左=" << static_cast<int>(pendingLeftNum) << std::endl;
-                    }
-                } else {
-                    // 与待定结果不同 → 重置
-                    pendingRightNum = pos.rightNum;
-                    pendingMidNum   = pos.midNum;
-                    pendingLeftNum  = pos.leftNum;
-                    stableFrameCount = 1;
-                    std::cout << "[INFO] 稳定化重置 (1/" << STABLE_THRESHOLD
-                              << ") 新待定: 右=" << static_cast<int>(pos.rightNum)
-                              << " 中=" << static_cast<int>(pos.midNum)
-                              << " 左=" << static_cast<int>(pos.leftNum) << std::endl;
-                }
+            const char* phaseName[3] = {"右", "中", "左"};
+            if (cyclePhase >= 3) {
+                matchingDone = true;
+                std::cout << "[INFO] 三轮匹配全部完成！" << std::endl;
+            } else {
+                std::cout << "[INFO] 3箱豆子确认，进入 Phase " << cyclePhase
+                          << " (" << phaseName[cyclePhase] << ")" << std::endl;
             }
         }
 
-        // ---- 5b. 识别数字，与目标比较，发送匹配信号 ----
-        //       仅在 已记录豆子 && 未等待确认 && 未在稳定化 时进行
-        {
+        // ---- 5c. 数字匹配：找离画面中心最近的数字，与当前阶段目标比较 ----
+        if (beansRecorded && !matchingDone && !waitingForBeanConfirm) {
             int bestDigit = -1;
             float bestDist = 1e9f;
             float frameCx = frame.cols * 0.5f;
             float frameCy = frame.rows * 0.5f;
 
             for (const auto& d : dets) {
-                // 数字类别: classId 3/4/5/6/7 对应数字 1/2/3/4/5
                 if (d.classId >= 3 && d.classId <= 7) {
-                    int digit = d.classId - 2;  // classId 3→1, 4→2, ..., 7→5
+                    int digit = d.classId - 2;
                     float cx = d.box.x + d.box.width * 0.5f;
                     float cy = d.box.y + d.box.height * 0.5f;
                     float dist = std::sqrt((cx - frameCx) * (cx - frameCx) +
@@ -526,29 +401,23 @@ int main(int argc, char** argv)
                 }
             }
 
-            // 仅在 已记录豆子 && 未等待3箱确认 && 未在稳定化 时才进行数字匹配
-            if (bestDigit >= 1 && bestDigit <= 5 &&
-                beansRecorded && !waitingForBeanConfirm && !inStabilization) {
-
-                // 根据当前循环相位选择目标数字
+            if (bestDigit >= 1 && bestDigit <= 5) {
                 uint8_t targetNum = 0;
+                const char* phaseName = "";
                 switch (cyclePhase) {
-                    case 0: targetNum = targetRightNum; break;  // 右
-                    case 1: targetNum = targetMidNum;   break;  // 中
-                    case 2: targetNum = targetLeftNum;  break;  // 左
+                    case 0: targetNum = targetRightNum; phaseName = "右"; break;
+                    case 1: targetNum = targetMidNum;   phaseName = "中"; break;
+                    case 2: targetNum = targetLeftNum;  phaseName = "左"; break;
                 }
 
-                uint8_t signal = (static_cast<uint8_t>(bestDigit) == targetNum) ? 1 : 0;
-                serial.sendMatchSignal(signal);
-
-                if (signal == 1) {
-                    signal1Sent = true;
+                if (static_cast<uint8_t>(bestDigit) == targetNum) {
+                    serial.sendMatchSignal(1, cfg.serialMaxRetries);
                     waitingForBeanConfirm = true;
-                    const char* phaseName[3] = {"右", "中", "左"};
-                    std::cout << "[INFO] 信息1 已发送！Phase " << cyclePhase
-                              << " (" << phaseName[cyclePhase] << ")"
-                              << " 目标数字=" << static_cast<int>(targetNum)
-                              << " 检测数字=" << bestDigit
+
+                    std::cout << "[INFO] 匹配！Phase " << cyclePhase
+                              << " (" << phaseName << ")"
+                              << " 目标=" << static_cast<int>(targetNum)
+                              << " 检测=" << bestDigit
                               << " — 等待3箱豆子确认..." << std::endl;
                 }
             }
