@@ -64,6 +64,13 @@ struct Config
             std::string key = line.substr(0, pos);
             std::string val = line.substr(pos + 1);
             trim(key); trim(val);
+            // 去掉行内注释
+            auto cmt = val.find('#');
+            if (cmt != std::string::npos) val = val.substr(0, cmt);
+            trim(val);
+            // 去掉引号
+            if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+                val = val.substr(1, val.size() - 2);
             if      (key == "confidence_threshold")    confidence_threshold = std::stod(val);
             else if (key == "nms_iou_threshold")       nms_iou_threshold    = std::stod(val);
             else if (key == "stable_threshold_beans")  stable_threshold_beans = std::stoi(val);
