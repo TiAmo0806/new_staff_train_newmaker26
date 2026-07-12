@@ -23,15 +23,11 @@
 #include "route_config.hpp"
 #include "stable_tracker.hpp"
 #include "packet.hpp"
-#include "CRC16.hpp"
 #include "serial.hpp"
 
 namespace fs = std::filesystem;
 
-// ============================================================
 //  类型别名
-// ============================================================
-
 using Configs = std::tuple<VisionConfig, RouteConfig, fs::file_time_type>;
 
 struct ReloadResult {
@@ -40,9 +36,7 @@ struct ReloadResult {
     bool changed;
 };
 
-// ============================================================
 //  1. 初始化 —— 各自独立，返回值表达结果
-// ============================================================
 
 static Configs loadAllConfigs(const std::string& visionPath,
                               const std::string& routePath)
@@ -104,36 +98,12 @@ reloadRoutesIfChanged(const std::string& path, RouteConfig routes)
         std::cout << "路径映射变化，重载..." << std::endl;
         routes.load(path);
     }
+//两套实现方式不一样——vision 用外部追踪 mtime，route 用内部fileChanged()
     return routes;
 }
 
 // ============================================================
-//  3. 采集 —— 带自动重连
-// ============================================================
-
-static std::optional<cv::Mat>
-captureFrame(Camera& cam, const VisionConfig& cfg, int& emptyCount)
-{
-    auto frame = cam.getFrame();
-    if (!frame.empty()) {
-        emptyCount = 0;
-        return frame;
-    }
-
-    emptyCount++;
-    if (emptyCount == 50) {
-        std::cerr << "连续空帧，尝试重连相机..." << std::endl;
-        cam.close();
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        if (cam.open(cfg.input_width, cfg.input_height))
-            std::cout << "相机重连成功" << std::endl;
-        emptyCount = 0;
-    }
-    return std::nullopt;
-}
-
-// ============================================================
-//  4. 推理 + 诊断
+//  3. 推理 + 诊断
 // ============================================================
 
 static std::vector<Detection>
@@ -175,18 +145,15 @@ static void sendCommand(const std::string& targetName,
                         SerialPort& serial, bool serialOk)
 {
     auto packet = path_serial_driver::makePacket(firstCmd, secondCmd, turnStrength);
-
-    crc16::Append_CRC16_Check_Sum(
-        reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
-
-    auto data = path_serial_driver::toVector(packet);
+    auto data   = path_serial_driver::pack(packet);   // CRC16 + 序列化
 
     if (serialOk) {
-        serial.send(data.data(), data.size());
+        serial.sendPacket(data);   // 重试 + 重连 + 日志 由 serial 内部处理
         return;
     }
 
     // 模拟模式
+
     auto cmdName = [](uint8_t v, uint8_t a, uint8_t b, uint8_t c) -> const char* {
         if (v == a) return "直行";
         if (v == b) return "左转";
@@ -253,7 +220,6 @@ static void runLoop(Camera& cam,
     auto lastVisionMtime = safeLastWriteTime(visionPath);
     StableTracker tracker(90);
     int frameCount   = 0;
-    int emptyCount   = 0;
     double fps       = 0.0;
     auto lastTime    = std::chrono::steady_clock::now();
 
@@ -286,9 +252,10 @@ static void runLoop(Camera& cam,
             }
         }
 
-        // 采集
-        auto maybeFrame = captureFrame(cam, cfg, emptyCount);
-        if (!maybeFrame) continue;   // 空帧，下一轮
+        // 采集（Camera 内部状态机处理重连，不阻塞主线程）
+        auto maybeFrame = cam.getFrameSafe(cfg.reconnect_threshold,
+                                           cfg.reconnect_delay_ms);
+        if (!maybeFrame) continue;   // 空帧或重连等待中，下一轮
         auto& frame = *maybeFrame;
 
         // 推理
@@ -296,7 +263,7 @@ static void runLoop(Camera& cam,
         printDiagnostics(frameCount, dets, frame, cfg);
 
         // 跟踪 → 查表 → 发送
-        if (auto target = tracker.update(dets, CLASS_NAMES)) {
+        if (auto target = tracker.update(dets)) {
             if (auto cmd = routes.lookup(*target)) {
                 sendCommand(*target, cmd->first_cmd, cmd->second_cmd,
                             cmd->turn_strength, serial, serialOk);

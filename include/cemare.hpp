@@ -8,6 +8,8 @@
 
 #include <opencv2/opencv.hpp>
 #include <iostream>
+#include <chrono>
+#include <optional>
 #include <CameraApi.h>
 
 class Camera
@@ -18,9 +20,14 @@ public:
 
     // 打开相机（自动枚举第一个可用相机）
     bool open(int width = 640, int height = 480);
-    
+
     // 获取一帧图像（阻塞，返回 BGR 格式 cv::Mat）
     cv::Mat getFrame();
+
+    // 安全取帧：自动检测空帧并通过状态机重连（不阻塞主线程）
+    // 返回 nullopt 表示跳过此帧（重连等待中或取帧失败）
+    std::optional<cv::Mat> getFrameSafe(int emptyThreshold = 50,
+                                        int reconnectDelayMs = 500);
 
     // 关闭相机
     void close();
@@ -32,23 +39,19 @@ public:
     int getWidth() const { return width_; }
     int getHeight() const { return height_; }
 
-    // 开始/停止录像（录像保存在当前目录）
-    void startRecording(const std::string& filename = "record.avi", int fps = 25);
-    void stopRecording();
-    bool isRecording() const { return is_recording_; }
-
 private:
+    enum class CamState { NORMAL, WAITING };
+
     int hCamera_;                       // 相机句柄
     int width_;
     int height_;
     int channel_;                       // 1=黑白, 3=彩色
     bool opened_;
     unsigned char* rgb_buffer_;         // BGR 图像缓存
+    int emptyCount_ = 0;                // 连续空帧计数
 
-    // 录像相关
-    cv::VideoWriter writer_;
-    bool is_recording_;
-    cv::Size frame_size_;
+    CamState camState_ = CamState::NORMAL;
+    std::chrono::steady_clock::time_point waitStart_;
 };
 
 #endif  // CAMERA_HPP_

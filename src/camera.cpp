@@ -11,8 +11,7 @@ Camera::Camera():
     height_(480),
     channel_(3),
     opened_(false),
-    rgb_buffer_(nullptr),
-    is_recording_(false)
+    rgb_buffer_(nullptr)
 {
     //SDK 全局初始化
     static bool sdk_inited = false;
@@ -66,6 +65,7 @@ bool Camera::open(int width, int height)
     if (cap.sIspCapacity.bMonoSensor) {
         channel_ = 1;
         CameraSetIspOutFormat(hCamera_, CAMERA_MEDIA_TYPE_MONO8);
+        //设置相机内部ISP处理后的输出图像格式
     } else {
         channel_ = 3;
         CameraSetIspOutFormat(hCamera_, CAMERA_MEDIA_TYPE_BGR8);
@@ -73,6 +73,7 @@ bool Camera::open(int width, int height)
 
     // 7. 分配 BGR 缓存
     rgb_buffer_ = (unsigned char*)malloc(maxW * maxH * 3);
+    //C 标准库的内存分配函数，默认返回 void*
     if (rgb_buffer_ == nullptr) {
         std::cerr << "图像缓存分配失败" << std::endl;
         CameraUnInit(hCamera_);
@@ -100,12 +101,14 @@ cv::Mat Camera::getFrame()
 
     tSdkFrameHead frame_info;
     BYTE* raw_buffer = nullptr;
+    //一种无符号字节类型（通常是 unsigned char 的别名）。表示“一个 8 位的二进制数据块”
 
     // 获取一帧原始图像（超时 2000ms）
     int status = CameraGetImageBuffer(hCamera_, &frame_info, &raw_buffer, 2000);
     if (status != CAMERA_STATUS_SUCCESS) {
         // 每 30 次才印一次，避免刷屏
         static int timeoutCount = 0;
+        //静态局部变量。它只初始化一次，但它的值会在函数多次调用之间保持
         if (++timeoutCount % 30 == 0)
             std::cerr << "获取图像超时 (已连续" << timeoutCount << "次)" << std::endl;
         return cv::Mat();
@@ -127,18 +130,12 @@ cv::Mat Camera::getFrame()
         height_ = frame_info.iHeight;
     }
 
-    // 录像
-    if (is_recording_ && writer_.isOpened()) {
-        writer_.write(mat);
-    }
-
     return mat.clone();
 }
 
 void Camera::close()
 {
     if (opened_ && hCamera_ != -1) {
-        stopRecording();
         CameraUnInit(hCamera_);
         hCamera_ = -1;
         opened_ = false;
@@ -151,38 +148,48 @@ void Camera::close()
     }
 }
 
+std::optional<cv::Mat> Camera::getFrameSafe(int emptyThreshold,
+                                               int reconnectDelayMs)
+{
+    using namespace std::chrono;
+
+    // ── WAITING 状态：等 delay 到了就 reopen ──
+    if (camState_ == CamState::WAITING) {
+        auto elapsed = duration_cast<milliseconds>(
+            steady_clock::now() - waitStart_).count();
+        if (elapsed >= reconnectDelayMs) {
+            if (open(width_, height_)) {
+                std::cout << "相机重连成功" << std::endl;
+                camState_ = CamState::NORMAL;
+                emptyCount_ = 0;
+            } else {
+                waitStart_ = steady_clock::now();  // 重连失败，重置计时
+                return std::nullopt;
+            }
+        } else {
+            return std::nullopt;  // 还没到时间，跳过
+        }
+    }
+
+    // ── NORMAL 状态：正常取帧 ──
+    auto frame = getFrame();
+    if (!frame.empty()) {
+        emptyCount_ = 0;
+        return frame;
+    }
+
+    emptyCount_++;
+    if (emptyCount_ >= emptyThreshold) {
+        std::cerr << "连续空帧，尝试重连相机..." << std::endl;
+        close();
+        camState_ = CamState::WAITING;
+        waitStart_ = steady_clock::now();
+        emptyCount_ = 0;
+    }
+    return std::nullopt;
+}
+
 bool Camera::isOpened() const
 {
     return opened_;
-}
-
-void Camera::startRecording(const std::string& filename, int fps)
-{
-    if (!opened_) {
-        std::cerr << "相机未打开，无法录像" << std::endl;
-        return;
-    }
-
-    if (is_recording_) {
-        stopRecording();
-    }
-
-    cv::Size size(width_, height_);
-    writer_.open(filename, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, size);
-    
-    if (writer_.isOpened()) {
-        is_recording_ = true;
-        std::cout << "开始录像: " << filename << std::endl;
-    } else {
-        std::cerr << "录像文件创建失败" << std::endl;
-    }
-}
-
-void Camera::stopRecording()
-{
-    if (is_recording_) {
-        writer_.release();
-        is_recording_ = false;
-        std::cout << "录像已停止" << std::endl;
-    }
 }

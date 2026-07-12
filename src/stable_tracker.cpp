@@ -14,8 +14,7 @@ const Detection* StableTracker::bestDetection(const std::vector<Detection>& dets
 }
 
 std::optional<std::string> StableTracker::update(
-    const std::vector<Detection>& detections,
-    const std::vector<std::string>& classNames)
+    const std::vector<Detection>& detections)
 {
     const Detection* best = bestDetection(detections);
     if (!best) {
@@ -23,7 +22,7 @@ std::optional<std::string> StableTracker::update(
         return std::nullopt;
     }
 
-    std::string name = classNames[best->class_id];
+    std::string name = CLASS_NAMES[best->class_id];
 
     // 冷却期：发送后沉默 N 帧，期满自动解锁
     if (name == last_sent_) {

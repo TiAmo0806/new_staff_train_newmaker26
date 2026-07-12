@@ -27,6 +27,13 @@ VisionConfig loadVisionConfig(const std::string& filepath)
             if (root["detection"]["used_classes"])
                 cfg.used_classes = root["detection"]["used_classes"].as<int>();
         }
+        if (root["camera"])
+        {
+            if (root["camera"]["reconnect_threshold"])
+                cfg.reconnect_threshold = root["camera"]["reconnect_threshold"].as<int>();
+            if (root["camera"]["reconnect_delay_ms"])
+                cfg.reconnect_delay_ms = root["camera"]["reconnect_delay_ms"].as<int>();
+        }
         if (root["display"])
         {
             if (root["display"]["font_scale"])

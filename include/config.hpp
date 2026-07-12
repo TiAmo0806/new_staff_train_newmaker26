@@ -37,6 +37,10 @@ struct VisionConfig
     double font_scale = 0.6;              // 文字大小
     int font_thickness = 2;               // 文字粗细
     int line_thickness = 2;               // 检测框边框粗细
+
+    //相机重连参数
+    int reconnect_threshold = 50;         // 连续空帧阈值
+    int reconnect_delay_ms = 500;         // 重连前等待时间(ms)
 };
 
 //加载参数函数声明

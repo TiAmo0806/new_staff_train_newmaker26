@@ -39,18 +39,31 @@ if(NOT EXISTS "${ONNXRUNTIME_LIB}")
 endif()
 
 # ---- MindVision SDK ----
-# 如果 SDK 不在默认路径，通过 -DMVSDK_ROOT=/path/to/sdk 指定
-if(NOT DEFINED MVSDK_ROOT)
-    set(MVSDK_ROOT "/opt/MVS" CACHE PATH "MindVision SDK 根目录")
-endif()
-set(MVSDK_INCLUDE "${MVSDK_ROOT}/include")
-set(MVSDK_LIB     "${MVSDK_ROOT}/lib/libMVSDK.so")
+# 优先级：项目内置 > -DMVSDK_ROOT=... > 系统默认路径
+set(MVSDK_LOCAL "${CMAKE_SOURCE_DIR}/include/MVSDK")
 
-# 尝试自动查找
+if(NOT DEFINED MVSDK_ROOT)
+    # 优先使用项目内置的 SDK
+    if(EXISTS "${MVSDK_LOCAL}/include/CameraApi.h" AND EXISTS "${MVSDK_LOCAL}/lib/libMVSDK.so")
+        set(MVSDK_ROOT "${MVSDK_LOCAL}" CACHE PATH "MindVision SDK 根目录")
+        set(MVSDK_INCLUDE "${MVSDK_ROOT}/include")
+        set(MVSDK_LIB     "${MVSDK_ROOT}/lib/libMVSDK.so")
+        message(STATUS "MindVision SDK: 使用项目内置版本 (${MVSDK_LOCAL})")
+    else()
+        set(MVSDK_ROOT "/opt/MVS" CACHE PATH "MindVision SDK 根目录")
+        set(MVSDK_INCLUDE "${MVSDK_ROOT}/include")
+        set(MVSDK_LIB     "${MVSDK_ROOT}/lib/libMVSDK.so")
+    endif()
+else()
+    set(MVSDK_INCLUDE "${MVSDK_ROOT}/include")
+    set(MVSDK_LIB     "${MVSDK_ROOT}/lib/libMVSDK.so")
+endif()
+
+# 自动查找（兜底）
 if(NOT EXISTS "${MVSDK_LIB}")
     find_library(MVSDK_LIB_FOUND NAMES MVSDK libMVSDK
-                 PATHS /opt/MVS/lib /usr/lib /usr/local/lib
-                       /opt/MindVision/lib)
+                 PATHS ${MVSDK_LOCAL}/lib /opt/MVS/lib /usr/lib /usr/local/lib
+                       /opt/MindVision/lib /opt/MV-SDK/lib/x64)
     if(MVSDK_LIB_FOUND)
         set(MVSDK_LIB "${MVSDK_LIB_FOUND}")
     endif()
@@ -58,8 +71,8 @@ endif()
 # 找头文件
 if(NOT EXISTS "${MVSDK_INCLUDE}/CameraApi.h")
     find_path(MVSDK_INCLUDE_FOUND CameraApi.h
-              PATHS /opt/MVS/include /usr/include /usr/local/include
-                    /opt/MindVision/include
+              PATHS ${MVSDK_LOCAL}/include /opt/MVS/include /usr/include /usr/local/include
+                    /opt/MindVision/include /opt/MV-SDK/include
               PATH_SUFFIXES MVCAMSDK MVSDK mindvision)
     if(MVSDK_INCLUDE_FOUND)
         set(MVSDK_INCLUDE "${MVSDK_INCLUDE_FOUND}")
@@ -135,10 +148,10 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     -Wall -Wextra -O2
 )
 
-# ONNX Runtime 运行时路径（若使用 rpath，模型运行时找得到 .so）
+# ONNX Runtime + MindVision SDK 运行时路径
 set_target_properties(${PROJECT_NAME} PROPERTIES
-    BUILD_RPATH "${ONNXRUNTIME_ROOT}/lib"
-    INSTALL_RPATH "${ONNXRUNTIME_ROOT}/lib"
+    BUILD_RPATH "${ONNXRUNTIME_ROOT}/lib:${MVSDK_ROOT}/lib"
+    INSTALL_RPATH "${ONNXRUNTIME_ROOT}/lib:${MVSDK_ROOT}/lib"
 )
 
 # ============================================================

@@ -25,8 +25,7 @@ public:
      * @return 如果稳定确认，返回目标名称；否则返回 nullopt
      */
     std::optional<std::string> update(
-        const std::vector<Detection>& detections,
-        const std::vector<std::string>& classNames);
+        const std::vector<Detection>& detections);
 
     /// 完全重置
     void reset()

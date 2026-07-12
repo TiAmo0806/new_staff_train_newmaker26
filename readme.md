@@ -67,31 +67,42 @@ white_kidney_bean 2 3 60
 ## 加载参数
 
 ### config.hpp 
-配置结构体:成员包含yaml文件所有参数类型及默认值。
+可调参数结构体VisionConfig:成员包含yaml文件所有参数类型及默认值。
 
 ### config.cpp
 
 | 函数 | 功能 |
 |------|------|
-| `loadVisionConfig` | 用 yaml-cpp 分级读取 `detection.*` 和 `display.*`，字段不存在用默认值 |
+| `loadVisionConfig` | 用 yaml-cpp 分级读取，字段不存在用默认值 |
 | `buildColorTable` | 颜色表，生成 N 种 HSV 色相均匀分布 |
 
 ### route_config.hpp
 
 | 组件 | 说明 |
 |------|------|
-| `PathCommand` | 成员包含txt文件所有参数类型及默认值。|
-| `safeLastWriteTime` | 工具函数，安全获取文件修改时间，文件不存在返回零值 |
-| `resolveProjectPath` | 工具函数，搜索路径 |
+| `PathCommand` | 参数结构体，成员包含txt文件所有参数类型及默认值。|
 | `RouteConfig` | 路径配置类 |
 
 #### RouteConfig 类
 
 | 方法 | 功能 |
 |------|------|
-| `load` | 从 txt 加载映射表 → `map<类别名, PathCommand>`，失败用默认值 |
-| `lookup` | 查表，返回 `optional<PathCommand>` |
-| `fileChanged` | 比较文件修改时间，用于热重载 |
+| `load` | fstream读取，存入mapping_，失败用默认值 |
+| `lookup` | mapping_.find(name)查表，返回 `optional<PathCommand>` |
+| `fileChanged` | 调用safeLastWriteTime获取文件修改时间进行比较，用于热重载 |
+
+| 成员 | 功能 |
+|------|------|
+| `filepath_` | 参数文件路径 |
+| `mapping_` | 参数存放容器 |
+| `mtime_` | 文件最后修改时间 |
+
+### 工具函数（`utils.hpp` ）
+
+| 方法 | 功能 |
+|------|------|
+| `safeLastWriteTime` | 工具函数，使用last_write_time获取文件修改时间，文件不存在返回零值 |
+| `resolveProjectPath` | 工具函数，fs::exists遍历搜索路径 |
 
 ---
 
@@ -101,9 +112,11 @@ white_kidney_bean 2 3 60
 
 | 方法 | 功能 |
 |------|------|
-| `open(w, h)` | 枚举 → 初始化 → 设置 ISP 格式（自动判断彩色/黑白） → 开始采集 |
+| `构造函数` | 初始化sdk |
+| `析构函数` | 调用close() |
+| `open(w, h)` | 枚举 → 相机初始化 → 设置 ISP 格式（自动判断彩色/黑白） → cameraplay |
 | `getFrame()` | 阻塞取一帧，2000ms 超时，经 SDK 图像处理后返回 `cv::Mat`（BGR） |
-| `close()` | 停止录像 → 释放 SDK → 释放缓存 |
+| `close()` | cameraUninit->释放缓存 |
 
 分辨率不强制设置，相机跑原生尺寸，`preprocess` 里 letterbox 做缩放。
 
@@ -133,8 +146,8 @@ white_kidney_bean 2 3 60
 
 | 函数 | 说明 |
 |------|------|
-| `parseYOLOv8OutputFeatureFirst` | [classes+4, anchors] 格式（YOLOv8/v11 官方） |
-| `parseYOLOv8OutputAnchorFirst` | [anchors, classes+4] 格式（某些第三方导出） |
+| `parseYOLOv8OutputFeatureFirst` | [classes+4, anchors] 格式 |
+| `parseYOLOv8OutputAnchorFirst` | [anchors, classes+4] 格式|
 | `applyNMS` | 按置信度排序 → IoU 过滤 → 去重 |
 | `getOutputInfo` | 从输出 shape 自动推断 `numClasses` 和 `numAnchors` |
 
@@ -168,25 +181,32 @@ struct VisionSendPacket {
     uint16_t second_cmd     : 2;  // bit 2-3（1=左/2=中/3=右分支）
     uint16_t turn_strength  : 7;  // bit 4-10（0~120）
     uint16_t reserved       : 5;  // bit 11-15
-    uint16_t checksum;            // CRC16
+    uint16_t checksum;            // CRC16占位
 } __attribute__((packed));       // 5 字节紧凑布局
 ```
 
-使用 bit-field 直接读写字段，`static_assert` 编译时校验布局。
+使用`bit-filed`（位域）直接读写字段，`static_assert`（静态断言）编译时校验布局。
 
 | 函数 | 功能 |
 |------|------|
-| `makePacket(f, s, t)` | 构造数据包 |
-| `toVector(packet)` | 结构体 → 字节数组（NUC 发送） |
-| `fromVector(data)` | 字节数组 → 结构体（云台接收） |
+| `makePacket` | 构造数据包结构体 |
+| `toVector(packet)` | 结构体转成字节数组（NUC发送） |
+| `fromVector(data)` | 字节数组转成结构体（云台接收） |
+| `pack` | crc16(Append_CRC16_Check_Sum),序列化(toVector) |
 
 ### serial.cpp —— Linux termios 串口
 
 | 方法 | 功能 |
 |------|------|
-| `open("/dev/gimbal")` | 打开串口，配置 115200 8N1 原始模式 |
-| `send(data, len)` | 写入字节到串口 |
-| `close()` | 关闭串口 |
+| `构造函数` | fd_初始赋值-1 |
+| `析构函数` | 调用close() |
+| `open("/dev/gimbal")` | 打开串口，调用configurePort进行配置，tcflush清理垃圾数据 |
+| `configurePort()` | 调用termios结构体配置模式，tcsetattr(fd_, TCSANOW, &tty)将模式配置到fd对应的串口|
+| `send(data, len)` | 使用write写入字节data之后len长度的内容到串口 |
+| `sendPacket()` | 集合重试，重连，TX日志|
+| `tryReconnect` | 打开串口，配置 115200 8N1 原始模式 |
+| `close` | 写入字节到串口 |
+| `isOpen()` | 关闭串口 |
 
 ### CRC16.hpp —— 校验
 
@@ -204,6 +224,14 @@ struct VisionSendPacket {
 1. **检测框**：矩形 + 标签（类别名、置信度、坐标尺寸），颜色按类别编码
 2. **四角标记**：红色圆点，确认画面正常渲染
 3. **状态栏**：YOLO/串口灯号、FPS、跟踪状态（stable counter/cool down）、检测数量
+
+---
+## 工具函数（`utils.hpp` ）
+
+| 方法 | 功能 |
+|------|------|
+| `safeLastWriteTime` | 工具函数，使用last_write_time获取文件修改时间，文件不存在返回零值 |
+| `resolveProjectPath` | 工具函数，fs::exists遍历搜索路径 |
 
 ---
 
