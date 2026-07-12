@@ -150,19 +150,18 @@ bool TaskStateMachine::processCommand(const std::string& line,
 }
 
 bool TaskStateMachine::processCameraCommand(const std::string& line,
-                                            InputManager& input,
-                                            MultiFrameRecognizer& recognizer,
                                             BeanNumberDetector& detector,
                                             RoiParser& parser,
                                             TaskGenerator& taskGenerator,
                                             Protocol& protocol,
-                                            SerialPort& serial) {
-    (void)detector;
-    (void)parser;
-
+                                            SerialPort& serial,
+                                            const AppConfig& config) {
     std::istringstream iss(line);
     std::string command;
+    std::string image_path;
+    std::string debug_flag;
     iss >> command;
+    iss >> image_path >> debug_flag;
 
     if (command.empty()) {
         return true;
@@ -175,32 +174,16 @@ bool TaskStateMachine::processCameraCommand(const std::string& line,
         return true;
     }
     if (command == "arrive_bean") {
-        if (state_ != TaskState::WAIT_BEAN_COMMAND) {
-            std::cout << "[WARN] expected arrive_digit\n";
-            return true;
+        std::string forwarded = "arrive_bean ";
+        forwarded += image_path.empty() ? "__camera__" : image_path;
+        if (!debug_flag.empty()) {
+            forwarded += " ";
+            forwarded += debug_flag;
         }
-        std::cout << "[RX MOCK] ARRIVE_BEAN\n";
-        setState(TaskState::SCAN_BEANS);
-        VisionResult result = recognizer.scanBeans(input, detector, parser);
-        if (!result.success) {
-            setState(TaskState::WAIT_BEAN_COMMAND);
-            return true;
-        }
-        return acceptBeanResult(result, protocol, serial);
+        return processCommand(forwarded, detector, parser, taskGenerator, protocol, serial, config);
     }
     if (command == "arrive_digit") {
-        if (state_ != TaskState::WAIT_DIGIT_COMMAND) {
-            std::cout << "[WARN] expected arrive_bean\n";
-            return true;
-        }
-        std::cout << "[RX MOCK] ARRIVE_DIGIT\n";
-        setState(TaskState::SCAN_DIGITS);
-        VisionResult result = recognizer.scanDigits(input, detector, parser);
-        if (!result.success) {
-            setState(TaskState::WAIT_DIGIT_COMMAND);
-            return true;
-        }
-        return acceptDigitResult(result, taskGenerator, protocol, serial);
+        return processCommand(line, detector, parser, taskGenerator, protocol, serial, config);
     }
 
     std::cout << "[WARN] unknown command: " << command << "\n";
@@ -295,6 +278,11 @@ bool TaskStateMachine::acceptBeanResult(const VisionResult& result,
         setState(TaskState::WAIT_BEAN_COMMAND);
         return true;
     }
+    if (memory_.beanBinds().empty()) {
+        std::cout << "[ERROR] bean binds are empty, skip BEAN_BIND send\n";
+        setState(TaskState::WAIT_BEAN_COMMAND);
+        return true;
+    }
 
     for (const auto& bind : memory_.beanBinds()) {
         std::cout << "[BIND] " << bind.pickup_id << " "
@@ -303,7 +291,11 @@ bool TaskStateMachine::acceptBeanResult(const VisionResult& result,
 
     setState(TaskState::SEND_BEAN_BIND);
     packet_ = protocol.makeBeanBindPacket(memory_.beanBinds());
-    serial.write(packet_);
+    if (!serial.write(packet_)) {
+        std::cout << "[ERROR] BEAN_BIND send failed or ACK timeout\n";
+        setState(TaskState::WAIT_BEAN_COMMAND);
+        return true;
+    }
     for (const auto& bind : memory_.beanBinds()) {
         std::cout << "[TX MOCK] BEAN_BIND pickup=" << bind.pickup_id
                   << " bean=" << bind.bean_class

@@ -8,7 +8,6 @@
 #include "input/InputManager.h"
 #include "parser/RoiParser.h"
 #include "recognition/MultiFrameRecognitionRunner.h"
-#include "recognition/MultiFrameRecognizer.h"
 #include "recognition/RecognitionRunner.h"
 #include "recognition/SingleFrameRecognitionRunner.h"
 #include "task/TaskGenerator.h"
@@ -128,7 +127,6 @@ void runCommandLoop(CommandSource& commandSource,
         config.input.type == "camera" ||
         config.input.type == "mindvision_camera" ||
         config.input.type == "video";
-    MultiFrameRecognizer recognizer(config);
     const bool open_input_for_command_mode = single_frame_runner_mode || camera_command_mode;
     if (open_input_for_command_mode && !input.open()) {
         std::cerr << "Input open failed.\n";
@@ -137,9 +135,10 @@ void runCommandLoop(CommandSource& commandSource,
 
     std::string line;
     while (commandSource.next(line)) {
-        const bool keep_running = camera_command_mode
-            ? taskStateMachine.processCameraCommand(line, input, recognizer, detector, parser, taskGenerator, protocol, serial)
-            : taskStateMachine.processCommand(line, detector, parser, taskGenerator, protocol, serial, config);
+        const bool keep_running =
+            camera_command_mode && config.command.source == "terminal"
+                ? taskStateMachine.processCameraCommand(line, detector, parser, taskGenerator, protocol, serial, config)
+                : taskStateMachine.processCommand(line, detector, parser, taskGenerator, protocol, serial, config);
         if (!keep_running) {
             break;
         }

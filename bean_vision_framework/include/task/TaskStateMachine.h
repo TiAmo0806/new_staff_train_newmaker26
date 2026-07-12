@@ -8,7 +8,6 @@
 #include "detector/BeanNumberDetector.h"
 #include "input/InputManager.h"
 #include "parser/RoiParser.h"
-#include "recognition/MultiFrameRecognizer.h"
 #include "recognition/RecognitionRunner.h"
 #include "task/TaskGenerator.h"
 #include "task/VisionMemory.h"
@@ -77,23 +76,21 @@ public:
     /**
      * @brief 处理相机调试模式下的终端命令。
      * @param line 用户输入的一行命令，例如 arrive_bean。
-     * @param input 已打开并保持取流的输入源。
-     * @param recognizer 多帧稳定识别器。
      * @param detector 检测器。
      * @param parser ROI 解析器。
      * @param taskGenerator 任务生成器。
      * @param protocol 协议打包器。
      * @param serial 串口发送模块。
+     * @param config 总配置。
      * @return 返回 false 表示收到 quit，需要退出命令循环。
      */
     bool processCameraCommand(const std::string& line,
-                              InputManager& input,
-                              MultiFrameRecognizer& recognizer,
                               BeanNumberDetector& detector,
                               RoiParser& parser,
                               TaskGenerator& taskGenerator,
                               Protocol& protocol,
-                              SerialPort& serial);
+                              SerialPort& serial,
+                              const AppConfig& config);
 
     /**
      * @brief 获取当前状态。
