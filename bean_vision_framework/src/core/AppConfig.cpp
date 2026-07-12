@@ -356,8 +356,12 @@ AppConfig AppConfig::load(const std::string& path) {
         } else if (section == "input") {
             if (key == "type") {
                 config.input.type = unquote(value);
-            } else if (key == "source") {
+            } else if (key == "source" || key == "path") {
                 config.input.source = unquote(value);
+            } else if (key == "bean_path") {
+                config.input.bean_path = unquote(value);
+            } else if (key == "digit_path") {
+                config.input.digit_path = unquote(value);
             } else if (key == "camera_id") {
                 config.input.camera_id = std::stoi(value);
                 config.camera.camera_id = config.input.camera_id;
@@ -495,6 +499,15 @@ AppConfig AppConfig::load(const std::string& path) {
 
     // app.yaml 只告诉我们子配置文件在哪里，这里继续加载子配置。
     loadClasses(resolvePath(base_dir, config.detector.class_file), config.detector);
+    if (!config.input.source.empty()) {
+        config.input.source = resolvePath(base_dir, config.input.source).string();
+    }
+    if (!config.input.bean_path.empty()) {
+        config.input.bean_path = resolvePath(base_dir, config.input.bean_path).string();
+    }
+    if (!config.input.digit_path.empty()) {
+        config.input.digit_path = resolvePath(base_dir, config.input.digit_path).string();
+    }
     if (!config.detector.model_path.empty()) {
         config.detector.model_path = resolvePath(base_dir, config.detector.model_path).string();
     }

@@ -4,6 +4,8 @@ runtime:
 input:
   type: "image"
   source: "data/test.jpg"
+  bean_path: "../data/src001_train_000003.png"
+  digit_path: "../data/src009_train_000016.png"
   camera_id: 0
 
 camera:

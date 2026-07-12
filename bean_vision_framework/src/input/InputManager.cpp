@@ -11,6 +11,40 @@
 InputManager::InputManager(const InputConfig& input_config, const CameraConfig& camera_config)
     : input_config_(input_config), camera_config_(camera_config) {}
 
+bool InputManager::loadImageFile(const std::string& path) {
+    image_ = cv::imread(path);
+    image_sent_ = false;
+    current_image_path_ = path;
+    if (image_.empty()) {
+        std::cerr << "Failed to read image: " << path << "\n";
+        return false;
+    }
+    return true;
+}
+
+bool InputManager::selectImageSource(ImagePurpose purpose) {
+    if (input_config_.type != "image") {
+        return true;
+    }
+
+    std::string path = input_config_.source;
+    if (purpose == ImagePurpose::Beans && !input_config_.bean_path.empty()) {
+        path = input_config_.bean_path;
+    } else if (purpose == ImagePurpose::Digits && !input_config_.digit_path.empty()) {
+        path = input_config_.digit_path;
+    }
+
+    if (path.empty()) {
+        std::cerr << "Image source is empty for current selection.\n";
+        return false;
+    }
+    if (path == current_image_path_ && !image_.empty()) {
+        image_sent_ = false;
+        return true;
+    }
+    return loadImageFile(path);
+}
+
 /**
  * @brief 析构时释放输入资源。
  */
@@ -32,13 +66,7 @@ bool InputManager::open() {
 
     if (input_config_.type == "image") {
         // image 模式只读取一张图片，适合调试单帧识别效果。
-        image_ = cv::imread(input_config_.source);
-        image_sent_ = false;
-        if (image_.empty()) {
-            std::cerr << "Failed to read image: " << input_config_.source << "\n";
-            return false;
-        }
-        return true;
+        return selectImageSource(ImagePurpose::Default);
     }
 
     if (input_config_.type == "video") {
@@ -113,6 +141,14 @@ bool InputManager::read(cv::Mat& frame) {
     return cap_.read(frame);
 }
 
+bool InputManager::selectImageForBeans() {
+    return selectImageSource(ImagePurpose::Beans);
+}
+
+bool InputManager::selectImageForDigits() {
+    return selectImageSource(ImagePurpose::Digits);
+}
+
 /**
  * @brief 重置输入源的读取状态。
  */
@@ -146,6 +182,9 @@ void InputManager::release() {
     if (cap_.isOpened()) {
         cap_.release();
     }
+    image_ = cv::Mat();
+    current_image_path_.clear();
+    image_sent_ = false;
 #ifdef BVP_WITH_MINDVISION
     if (camera_manager_) {
         camera_manager_->close();

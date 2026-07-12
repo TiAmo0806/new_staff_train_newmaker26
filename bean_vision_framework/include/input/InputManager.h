@@ -10,6 +10,12 @@
 class CameraManager;
 #endif
 
+enum class ImagePurpose {
+    Default,
+    Beans,
+    Digits
+};
+
 class InputManager {
 public:
     /**
@@ -42,6 +48,18 @@ public:
     bool read(cv::Mat& frame);
 
     /**
+     * @brief 在 image 模式下切换到豆子阶段专用图片。
+     * @return 切换成功返回 true；非 image 模式下直接返回 true。
+     */
+    bool selectImageForBeans();
+
+    /**
+     * @brief 在 image 模式下切换到数字阶段专用图片。
+     * @return 切换成功返回 true；非 image 模式下直接返回 true。
+     */
+    bool selectImageForDigits();
+
+    /**
      * @brief 重置输入源的读取状态。
      *
      * image/mock 模式下会重置单次读取标志，使下一次 read() 可以再次成功；
@@ -59,10 +77,14 @@ public:
     void release();
 
 private:
+    bool selectImageSource(ImagePurpose purpose);
+    bool loadImageFile(const std::string& path);
+
     InputConfig input_config_;
     CameraConfig camera_config_;
     cv::VideoCapture cap_;
     cv::Mat image_;
+    std::string current_image_path_;
 #ifdef BVP_WITH_MINDVISION
     std::unique_ptr<CameraManager> camera_manager_;
 #endif

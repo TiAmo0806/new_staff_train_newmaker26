@@ -37,10 +37,22 @@ SingleFrameRecognitionRunner::SingleFrameRecognitionRunner(InputManager& bean_in
       parser_(parser) {}
 
 bool SingleFrameRecognitionRunner::scanBeans(VisionResult& result) {
+    if (!bean_input_.selectImageForBeans()) {
+        result = VisionResult{};
+        result.success = false;
+        result.reason = "input_select_failed";
+        return false;
+    }
     return scanSingleFrame(bean_input_, detector_, parser_, result);
 }
 
 bool SingleFrameRecognitionRunner::scanDigits(VisionResult& result) {
+    if (!digit_input_.selectImageForDigits()) {
+        result = VisionResult{};
+        result.success = false;
+        result.reason = "input_select_failed";
+        return false;
+    }
     return scanSingleFrame(digit_input_, detector_, parser_, result);
 }
 

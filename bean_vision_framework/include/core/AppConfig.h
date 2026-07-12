@@ -21,7 +21,9 @@ struct RuntimeConfig {
  */
 struct InputConfig {
     std::string type = "mock";      // 输入类型：mock / image / video / camera / mindvision_camera。
-    std::string source;             // 图片或视频路径。
+    std::string source;             // 默认图片或视频路径，兼容旧配置中的 path。
+    std::string bean_path;          // image 模式下豆子阶段专用图片路径，空时回退到 source。
+    std::string digit_path;         // image 模式下数字阶段专用图片路径，空时回退到 source。
     int camera_id = 0;              // 摄像头编号，camera 模式下使用。
 };
 
