@@ -27,6 +27,6 @@ venv/
 env/
 conda_env/
 onnxruntime-sdk/
-CameraApi.h
+MVSDK/
 Camera/
 
