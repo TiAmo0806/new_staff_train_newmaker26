@@ -2,8 +2,8 @@ runtime:
   mode: "real_robot"
 
 input:
-  type: "mindvision_camera"
-  source: ""
+  type: "image"
+  source: "../data/src001_train_000003.png"
   camera_id: 0
 
 camera:

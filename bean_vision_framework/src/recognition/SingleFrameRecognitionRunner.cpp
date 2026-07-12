@@ -6,10 +6,10 @@
 
 namespace {
 
-bool scanSingleFrame(InputManager& input,
-                     BeanNumberDetector& detector,
-                     RoiParser& parser,
-                     VisionResult& result) {
+bool readAndParseSingleFrame(InputManager& input,
+                             BeanNumberDetector& detector,
+                             RoiParser& parser,
+                             VisionResult& result) {
     input.reset();
 
     cv::Mat frame;
@@ -22,6 +22,16 @@ bool scanSingleFrame(InputManager& input,
 
     const std::vector<Detection> detections = detector.detect(frame);
     result = parser.parse(detections);
+    return true;
+}
+
+bool scanSingleFrame(InputManager& input,
+                     BeanNumberDetector& detector,
+                     RoiParser& parser,
+                     VisionResult& result) {
+    if (!readAndParseSingleFrame(input, detector, parser, result)) {
+        return false;
+    }
     return result.success;
 }
 
@@ -53,7 +63,7 @@ bool SingleFrameRecognitionRunner::scanDigits(VisionResult& result) {
         result.reason = "input_select_failed";
         return false;
     }
-    return scanSingleFrame(digit_input_, detector_, parser_, result);
+    return readAndParseSingleFrame(digit_input_, detector_, parser_, result);
 }
 
 void SingleFrameRecognitionRunner::reset() {
