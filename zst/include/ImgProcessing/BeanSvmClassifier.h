@@ -1,7 +1,7 @@
 #ifndef BEAN_SVM_CLASSIFIER_H
 #define BEAN_SVM_CLASSIFIER_H
 
-#include "/home/zst/zst/include/ImgProcessing/VisionTypes.h"
+#include "ImgProcessing/VisionTypes.h"
 #include <opencv2/core.hpp>
 #include <opencv2/ml.hpp>
 #include <string>

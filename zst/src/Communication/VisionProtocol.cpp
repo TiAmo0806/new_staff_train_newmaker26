@@ -1,4 +1,4 @@
-#include "/home/zst/zst/include/Communication/VisionProtocol.h"
+#include "Communication/VisionProtocol.h"
 #include <stdexcept>
 
 namespace

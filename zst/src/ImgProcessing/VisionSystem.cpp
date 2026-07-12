@@ -1,4 +1,4 @@
-#include "/home/zst/zst/include/ImgProcessing/VisionSystem.h"
+#include "ImgProcessing/VisionSystem.h"
 #include <algorithm>
 #include <iostream>
 #include <opencv2/imgproc.hpp>

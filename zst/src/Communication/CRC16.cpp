@@ -1,4 +1,4 @@
-#include "/home/zst/zst/include/Communication/CRC16.hpp"
+#include "Communication/CRC16.hpp"
 #include <cstdint>
 
 namespace crc16

@@ -1,7 +1,7 @@
 #ifndef TASK_PLANNER_H
 #define TASK_PLANNER_H
 
-#include "/home/zst/zst/include/ImgProcessing/VisionTypes.h"
+#include "ImgProcessing/VisionTypes.h"
 #include <opencv2/core.hpp>
 #include <vector>
 

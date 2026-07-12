@@ -1,8 +1,9 @@
 #ifndef YOLO_ORT_DETECTOR_H
 #define YOLO_ORT_DETECTOR_H
 
-#include "/home/zst/zst/include/ImgProcessing/VisionTypes.h"
-#include "/home/zst/onnxruntime/include/onnxruntime_cxx_api.h"
+#include "ImgProcessing/VisionTypes.h"
+// 由 CMake 的 ONNXRUNTIME_INCLUDE_DIR 提供搜索路径，不绑定任何用户主目录。
+#include <onnxruntime_cxx_api.h>
 #include <cstdint>
 #include <opencv2/core.hpp>
 #include <string>

@@ -1,4 +1,4 @@
-#include "/home/zst/zst/include/ImgProcessing/FieldStateCollector.h"
+#include "ImgProcessing/FieldStateCollector.h"
 #include <algorithm>
 
 namespace

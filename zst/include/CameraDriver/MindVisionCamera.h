@@ -1,7 +1,9 @@
 #ifndef MINDVISION_CAMERA_H
 #define MINDVISION_CAMERA_H                  
 //头文件保护(防止头文件被重复 include 导致重定义)
-#include "/home/zst/linuxSDK/include/CameraApi.h"
+// CameraApi.h 属于 MindVision SDK，由 CMake 的 MINDVISION_INCLUDE_DIR 提供搜索路径。
+// 不在源码中写死 /home/某个用户/...，这样工程移动到任意 NUC 用户目录都能编译。
+#include <CameraApi.h>
 #include <opencv2/opencv.hpp>
 #include <vector>
 

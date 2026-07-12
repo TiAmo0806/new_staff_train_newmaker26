@@ -4,8 +4,9 @@ camera:
   auto_exposure: true
 
 model:
-  onnx_path: "/home/zst/zst/best.onnx" # YOLOv8 导出的 ONNX，不是训练用的 .pt
-  svm_path: "/home/zst/bean_svm.yml"   # 豆子二次分类模型；文件不存在时会退回纯 YOLO
+  # 相对路径以 zst 项目根目录为基准，由 Utils 自动转换成绝对路径。
+  onnx_path: "best.onnx"               # YOLO 导出的 ONNX，不是训练用的 .pt
+  svm_path: "bean_svm.yml"             # 可选；文件不存在时会退回纯 YOLO
   input_width: 640                      # 必须与 ONNX 导出时的 imgsz/输入宽度一致
   input_height: 640                     # 必须与 ONNX 导出时的 imgsz/输入高度一致
   confidence: 0.35                      # 类别置信度阈值：越高误检越少、漏检可能越多

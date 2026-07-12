@@ -1,4 +1,4 @@
-#include "/home/zst/zst/include/ImgProcessing/CompetitionWorkflow.h"
+#include "ImgProcessing/CompetitionWorkflow.h"
 #include <algorithm>
 #include <iostream>
 

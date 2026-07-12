@@ -7,14 +7,17 @@
 
 std::string makeRunTimestamp()
 {
-    std::time_t now = std::time(nullptr);
+    std::time_t now = std::time(nullptr);    
+    //当前时间
     std::tm local = *std::localtime(&now);
+    //将时间转换为当前系统时区下的年、月、日、时、分。
     std::ostringstream oss;
     oss << std::put_time(&local, "%y%m%d%H%M");
+    //格式化时间   年（26） 月（07） 日（12） 时(15) 分（38）
     return oss.str();
 }
 
-std::filesystem::path resolveProjectRoot(const std::string &configPath)
+std::filesystem::path resolveProjectRoot(const std::string &configPath) //推断项目根目录
 {
     if (!configPath.empty())
     {
@@ -72,9 +75,9 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
                 const std::string mode = w["team_mode"].as<std::string>();
                 config.workflow.mode = mode == "team_b" ? TeamMode::TeamB : TeamMode::TeamA;
             }
-            if (w["vote_frames_per_stage"])
+            if (w["vote_frames_per_stage"])  //推测表示每个业务阶段收集多少帧检测结果，再进行投票决定最终结果
                 config.workflow.voteFramesPerStage = w["vote_frames_per_stage"].as<int>();
-            if (w["min_hits_per_stage"])
+            if (w["min_hits_per_stage"])     //推测表示在一阶段的多帧检测中，至少有多少帧识别到同一结果，才认为结果有效
                 config.workflow.minHitsPerStage = w["min_hits_per_stage"].as<int>();
             if (w["session_id"])
                 config.workflow.sessionId = static_cast<uint8_t>(w["session_id"].as<int>());
@@ -83,7 +86,7 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
         {
             auto p = y["planner"];
             if (p["min_stable_frames"]) config.vision.planner.minStableFrames = p["min_stable_frames"].as<int>();
-        }
+        }      //推测表示一个识别结果必须连续稳定多少帧，规划器才采取动作
         return true;
     }
     catch (const std::exception &e)

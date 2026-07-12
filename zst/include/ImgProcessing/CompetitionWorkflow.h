@@ -1,8 +1,8 @@
 #ifndef COMPETITION_WORKFLOW_H
 #define COMPETITION_WORKFLOW_H
 
-#include "/home/zst/zst/include/Communication/VisionProtocol.h"
-#include "/home/zst/zst/include/ImgProcessing/FieldStateCollector.h"
+#include "Communication/VisionProtocol.h"
+#include "ImgProcessing/FieldStateCollector.h"
 #include <cstdint>
 #include <vector>
 

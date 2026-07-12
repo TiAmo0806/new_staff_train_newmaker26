@@ -1,4 +1,4 @@
-#include "/home/zst/zst/include/CameraDriver/MindVisionCamera.h"
+#include "CameraDriver/MindVisionCamera.h"
 
 #include <iostream>
 

@@ -1,4 +1,4 @@
-#include "/home/zst/zst/include/ImgProcessing/BeanSvmClassifier.h"
+#include "ImgProcessing/BeanSvmClassifier.h"
 #include <algorithm>
 #include <cstring>
 #include <iostream>

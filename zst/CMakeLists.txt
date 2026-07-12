@@ -16,79 +16,92 @@ find_package(yaml-cpp REQUIRED)
 
 
 # ONNX Runtime
+#
+# 不把任何用户名或 /home 路径写死在工程中。查找优先级：
+#   1) cmake -DONNXRUNTIME_ROOT=/实际目录
+#   2) 环境变量 ONNXRUNTIME_ROOT
+#   3) 工程同级的 onnxruntime / onnxruntime-linux-x64-* 目录
+#   4) CMake 默认系统搜索路径（/usr、/usr/local 等）
+set(ONNXRUNTIME_ROOT "$ENV{ONNXRUNTIME_ROOT}"
+    CACHE PATH "ONNX Runtime installation root")
 
-set(ONNXRUNTIME_ROOT
-    "$ENV{ONNXRUNTIME_ROOT}"
-    CACHE PATH "ONNX Runtime root directory")
-
-if(NOT ONNXRUNTIME_ROOT)
-    set(ONNXRUNTIME_ROOT
-        "/home/zst/onnxruntime")
-endif()
+file(GLOB ONNXRUNTIME_SIBLING_DIRS
+    LIST_DIRECTORIES true
+    "${CMAKE_CURRENT_SOURCE_DIR}/../onnxruntime*"
+)
 
 find_path(ONNXRUNTIME_INCLUDE_DIR
     NAMES onnxruntime_cxx_api.h
-    PATHS
-        "${ONNXRUNTIME_ROOT}/include"
-        "/usr/local/include/onnxruntime"
-        "/usr/local/include"
-        "/opt/onnxruntime/include"
-    NO_DEFAULT_PATH)
+    HINTS
+        "${ONNXRUNTIME_ROOT}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../onnxruntime"
+        ${ONNXRUNTIME_SIBLING_DIRS}
+    PATH_SUFFIXES
+        include
+        include/onnxruntime
+        include/onnxruntime/core/session
+)
 
 find_library(ONNXRUNTIME_LIBRARY
     NAMES onnxruntime libonnxruntime
-    PATHS
-        "${ONNXRUNTIME_ROOT}/lib"
-        "/usr/local/lib"
-        "/usr/lib"
-        "/opt/onnxruntime/lib"
-    NO_DEFAULT_PATH)
+    HINTS
+        "${ONNXRUNTIME_ROOT}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../onnxruntime"
+        ${ONNXRUNTIME_SIBLING_DIRS}
+    PATH_SUFFIXES lib lib64
+)
 
 if(NOT ONNXRUNTIME_INCLUDE_DIR)
-    message(FATAL_ERROR "找不到 onnxruntime_cxx_api.h，请设置 ONNXRUNTIME_ROOT")
+    message(FATAL_ERROR
+        "找不到 onnxruntime_cxx_api.h。请使用：\n"
+        "  cmake .. -DONNXRUNTIME_ROOT=/你的/onnxruntime根目录\n"
+        "该根目录下面应包含 include/onnxruntime_cxx_api.h")
 endif()
 
 if(NOT ONNXRUNTIME_LIBRARY)
-    message(FATAL_ERROR "找不到 libonnxruntime.so，请设置 ONNXRUNTIME_ROOT")
+    message(FATAL_ERROR
+        "找不到 libonnxruntime.so。请检查 ONNXRUNTIME_ROOT 下是否存在 lib/ 或 lib64/")
 endif()
 
 
 # MindVision 工业相机 SDK
+# 查找方式与 ONNX Runtime 相同：命令行/环境变量优先，其次工程同级目录和系统目录。
+set(MINDVISION_ROOT "$ENV{MINDVISION_ROOT}"
+    CACHE PATH "MindVision Linux SDK installation root")
 
-set(MINDVISION_ROOT
-    "$ENV{MINDVISION_ROOT}"
-    CACHE PATH "MindVision SDK root directory")
-
-if(NOT MINDVISION_ROOT)
-    set(MINDVISION_ROOT "/home/zst/linuxSDK")
-endif()
+file(GLOB MINDVISION_SIBLING_DIRS
+    LIST_DIRECTORIES true
+    "${CMAKE_CURRENT_SOURCE_DIR}/../linuxSDK*"
+)
 
 find_path(MINDVISION_INCLUDE_DIR
     NAMES CameraApi.h
-    PATHS
-        "${MINDVISION_ROOT}/include"
-        "/usr/local/include"
-        "/usr/include"
-        "/opt/MindVision/include"
-    NO_DEFAULT_PATH)
+    HINTS
+        "${MINDVISION_ROOT}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../linuxSDK"
+        ${MINDVISION_SIBLING_DIRS}
+    PATH_SUFFIXES include
+)
 
 find_library(MINDVISION_LIBRARY
     NAMES MVSDK libMVSDK
-    PATHS
-        "${MINDVISION_ROOT}/lib/x64"
-        "${MINDVISION_ROOT}/lib"
-        "/usr/local/lib"
-        "/usr/lib"
-        "/opt/MindVision/lib/x64"
-        "/opt/MindVision/lib"
-    NO_DEFAULT_PATH)
+    HINTS
+        "${MINDVISION_ROOT}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../linuxSDK"
+        ${MINDVISION_SIBLING_DIRS}
+    PATH_SUFFIXES lib/x64 lib/amd64 lib lib64
+)
 
 if(NOT MINDVISION_INCLUDE_DIR)
-    message(FATAL_ERROR "找不到 CameraApi.h，请设置 MINDVISION_ROOT")
+    message(FATAL_ERROR
+        "找不到 CameraApi.h。请使用：\n"
+        "  cmake .. -DMINDVISION_ROOT=/你的/MindVision-Linux-SDK根目录\n"
+        "该根目录下面应包含 include/CameraApi.h")
 endif()
 
 if(NOT MINDVISION_LIBRARY)
-    message(FATAL_ERROR "找不到 libMVSDK.so，请设置 MINDVISION_ROOT")
+    message(FATAL_ERROR
+        "找不到 libMVSDK.so。请检查 MINDVISION_ROOT 下的 lib/x64、lib 或 lib64")
 endif()
 
 message(STATUS "OpenCV version: ${OpenCV_VERSION}")
@@ -119,9 +132,11 @@ add_executable(logistics_vision ${ALL_SOURCES})
 # ============================================================================
 # 头文件路径
 # ============================================================================
-# 所有项目内部头文件使用绝对路径，例如：
-#   #include "/home/zst/zst/include/ImgProcessing/VisionSystem.h"
-#   #include "/home/zst/zst/include/CameraDriver/MindVisionCamera.h"
+# 项目内部统一使用相对于 include/ 的路径，例如：
+#   #include "ImgProcessing/VisionSystem.h"
+#   #include "CameraDriver/MindVisionCamera.h"
+# 第三方头文件使用 <CameraApi.h> / <onnxruntime_cxx_api.h>，
+# 实际目录由下面的 MINDVISION_INCLUDE_DIR / ONNXRUNTIME_INCLUDE_DIR 注入。
 target_include_directories(logistics_vision PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${OpenCV_INCLUDE_DIRS}

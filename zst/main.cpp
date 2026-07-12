@@ -7,22 +7,25 @@
  *   配置读取 -> Tool/
  */
 
-#include "/home/zst/zst/include/CameraDriver/MindVisionCamera.h"
-#include "/home/zst/zst/include/Communication/VisionProtocol.h"
-#include "/home/zst/zst/include/ImgProcessing/CompetitionWorkflow.h"
-#include "/home/zst/zst/include/Communication/VirtualSerial.h"
-#include "/home/zst/zst/include/ImgProcessing/VisionSystem.h"
-#include "/home/zst/zst/include/Tool/Utils.h"
+#include "CameraDriver/MindVisionCamera.h"
+#include "Communication/VisionProtocol.h"
+#include "ImgProcessing/CompetitionWorkflow.h"
+#include "Communication/VirtualSerial.h"
+#include "ImgProcessing/VisionSystem.h"
+#include "Tool/Utils.h"
 #include <iostream>
 #include <opencv2/highgui.hpp>
 #include <string>
 
 int main(int argc, char **argv)
 {
-    // 默认从 build 目录运行，所以配置路径指向 ../config。
-    // 如果你在其他位置运行，也可以手动传入配置文件：
-    //   ./logistics_vision /home/zst/src/config/vision.yaml
-    std::string configPath = argc > 1 ? argv[1] : "../config/vision.yaml";
+    // 显式传参时优先使用用户给出的配置；未传参时根据可执行文件位置查找。
+    // 因此无论从 build 目录、项目根目录还是 VS Code 启动，都不会依赖当前工作目录。
+    const std::string configPath = argc > 1
+        ? std::string(argv[1])
+        : findDefaultConfigPath(argv[0]).string();
+
+    std::cout << "[Main] 配置文件: " << configPath << std::endl;
 
     // 1. 读取配置。
     // 配置文件里放模型路径、相机参数、串口参数、是否显示窗口等。
@@ -30,7 +33,9 @@ int main(int argc, char **argv)
     AppConfig config;
     if (!loadAppConfig(configPath, config))
     {
-        std::cerr << "[Main] 使用默认配置继续运行" << std::endl;
+        // 模型路径也来自配置文件，继续运行只会在加载 ONNX 时再次报错。
+        std::cerr << "[Main] 配置文件加载失败，程序退出" << std::endl;
+        return 1;
     }
 
     // 2. 打开工业相机。

@@ -110,18 +110,17 @@ sudo apt update
 sudo apt install -y build-essential cmake libopencv-dev libyaml-cpp-dev
 ```
 
-目录建议：
+NUC目录示例（用户名和安装位置可以任意）：
 
 ```text
-/home/zst/Desktop/
-  zst/
-  onnxruntime-linux-x64-1.27.0/
-    onnxruntime-linux-x64-1.27.0/
-      include/
-      lib/
-  linuxSDK_V2.1.0.49202602041120/
-    include/
-    lib/x64/
+/任意目录/
+  zst/                              # 本项目
+  onnxruntime-linux-x64-版本号/       # ONNX Runtime根目录
+    include/onnxruntime_cxx_api.h
+    lib/libonnxruntime.so
+  linuxSDK_版本号/                    # MindVision Linux SDK根目录
+    include/CameraApi.h
+    lib/x64/libMVSDK.so
 ```
 
 编译示例：
@@ -133,12 +132,42 @@ cmake ..
 make -j
 ```
 
-如果依赖目录不在桌面同级，手动指定：
+推荐在NUC首次配置时明确指定两个依赖根目录。路径只保存在build的CMake缓存中，
+不会写死进源码：
 
 ```bash
 cmake .. \
   -DONNXRUNTIME_ROOT=/你的/onnxruntime-linux-x64-1.27.0 \
   -DMINDVISION_ROOT=/你的/linuxSDK_V2.1.0.49202602041120
+```
+
+也可以使用环境变量：
+
+```bash
+export ONNXRUNTIME_ROOT=/实际路径/onnxruntime-linux-x64-版本号
+export MINDVISION_ROOT=/实际路径/linuxSDK_版本号
+cmake ..
+```
+
+源码中的项目头文件全部使用相对包含，例如：
+
+```cpp
+#include "ImgProcessing/VisionSystem.h"
+#include "Communication/VirtualSerial.h"
+#include <onnxruntime_cxx_api.h>
+#include <CameraApi.h>
+```
+
+如果曾用旧的绝对路径生成过build目录，必须清理旧CMake缓存后重新配置：
+
+```bash
+cd /你的/zst
+rm -rf build
+mkdir build && cd build
+cmake .. \
+  -DONNXRUNTIME_ROOT=/实际路径/onnxruntime根目录 \
+  -DMINDVISION_ROOT=/实际路径/MindVision-SDK根目录
+make -j"$(nproc)"
 ```
 
 运行示例：

@@ -1,8 +1,8 @@
 #ifndef VISION_PROTOCOL_H
 #define VISION_PROTOCOL_H
 
-#include "/home/zst/zst/include/Communication/VirtualSerial.h"
-#include "/home/zst/zst/include/ImgProcessing/FieldState.h"
+#include "Communication/VirtualSerial.h"
+#include "ImgProcessing/FieldState.h"
 #include <cstdint>
 #include <vector>
 

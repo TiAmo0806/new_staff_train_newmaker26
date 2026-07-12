@@ -1,4 +1,4 @@
-#include "/home/zst/zst/include/ImgProcessing/VisionTypes.h"
+#include "ImgProcessing/VisionTypes.h"
 
 std::string beanToString(BeanType bean)
 {
@@ -32,4 +32,3 @@ int targetDigitForBean(BeanType bean)
     if (bean == BeanType::WhiteKidneyBean) return 3;
     return 0;
 }
-

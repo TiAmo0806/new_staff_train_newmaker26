@@ -1,4 +1,4 @@
-#include "/home/zst/zst/include/ImgProcessing/YoloOrtDetector.h"
+#include "ImgProcessing/YoloOrtDetector.h"
 #include <algorithm>
 #include <array>
 #include <cmath>

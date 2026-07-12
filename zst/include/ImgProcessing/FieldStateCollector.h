@@ -1,8 +1,8 @@
 #ifndef FIELD_STATE_COLLECTOR_H
 #define FIELD_STATE_COLLECTOR_H
 
-#include "/home/zst/zst/include/ImgProcessing/FieldState.h"
-#include "/home/zst/zst/include/ImgProcessing/VisionTypes.h"
+#include "ImgProcessing/FieldState.h"
+#include "ImgProcessing/VisionTypes.h"
 #include <array>
 #include <vector>
 

@@ -1,5 +1,5 @@
-#include "/home/zst/zst/include/Communication/VirtualSerial.h"
-#include "/home/zst/zst/include/Communication/CRC16.hpp"
+#include "Communication/VirtualSerial.h"
+#include "Communication/CRC16.hpp"
 #include <dirent.h>
 #include <fcntl.h>
 #include <iomanip>

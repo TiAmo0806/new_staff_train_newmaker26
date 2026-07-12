@@ -1,4 +1,4 @@
-#include "/home/zst/zst/include/Communication/ByteConverter.h"
+#include "Communication/ByteConverter.h"
 #include <cstring>
 
 std::array<uint8_t, 4> ByteConverter::floatToBytesLittle(float value)

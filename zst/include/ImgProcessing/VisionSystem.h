@@ -1,9 +1,9 @@
 #ifndef VISION_SYSTEM_H
 #define VISION_SYSTEM_H
 
-#include "/home/zst/zst/include/ImgProcessing/BeanSvmClassifier.h"
-#include "/home/zst/zst/include/ImgProcessing/TaskPlanner.h"
-#include "/home/zst/zst/include/ImgProcessing/YoloOrtDetector.h"
+#include "ImgProcessing/BeanSvmClassifier.h"
+#include "ImgProcessing/TaskPlanner.h"
+#include "ImgProcessing/YoloOrtDetector.h"
 #include <memory>
 #include <opencv2/core.hpp>
 #include <string>
