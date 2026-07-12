@@ -1,10 +1,12 @@
 #include "task/TaskStateMachine.h"
 
+#include "task/DigitInference.h"
 #include "utils/DebugLogger.h"
 
 #include <opencv2/imgcodecs.hpp>
 
 #include <iostream>
+#include <map>
 #include <sstream>
 
 namespace {
@@ -34,6 +36,98 @@ const char* stateName(TaskState state) {
         return "DONE";
     }
     return "UNKNOWN";
+}
+
+const PositionResult& digitPositionByPlace(const VisionResult& result, int place_id) {
+    switch (place_id) {
+    case 4:
+        return result.l4;
+    case 5:
+        return result.l5;
+    case 6:
+        return result.l6;
+    case 7:
+        return result.l7;
+    case 8:
+        return result.l8;
+    default:
+        return result.l4;
+    }
+}
+
+int digitValue(const PositionResult& position) {
+    if (!position.valid) {
+        return 0;
+    }
+    if (position.class_name == "digit_1") {
+        return 1;
+    }
+    if (position.class_name == "digit_2") {
+        return 2;
+    }
+    if (position.class_name == "digit_3") {
+        return 3;
+    }
+    if (position.class_name == "digit_4") {
+        return 4;
+    }
+    if (position.class_name == "digit_5") {
+        return 5;
+    }
+    return 0;
+}
+
+void printDigitSnapshot(const VisionResult& result) {
+    const std::map<int, std::string> place_labels = {
+        {4, "L4"},
+        {5, "L5"},
+        {6, "L6"},
+        {7, "L7"},
+        {8, "L8"},
+    };
+
+    for (const auto& [place_id, label] : place_labels) {
+        const PositionResult& position = digitPositionByPlace(result, place_id);
+        const int digit = digitValue(position);
+        if (digit > 0) {
+            std::cout << "[DIGIT] " << label << " = digit_" << digit << "\n";
+        } else {
+            std::cout << "[DIGIT] " << label << " = unknown\n";
+        }
+    }
+}
+
+std::string formatMissingPlaces(const std::vector<int>& missing_places) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < missing_places.size(); ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << "L" << missing_places[i];
+    }
+    return oss.str();
+}
+
+VisionResult mergeBeanAndDigitResult(const VisionResult& bean_result, const VisionResult& digit_result) {
+    VisionResult merged = bean_result;
+    merged.l4 = digit_result.l4;
+    merged.l5 = digit_result.l5;
+    merged.l6 = digit_result.l6;
+    merged.l7 = digit_result.l7;
+    merged.l8 = digit_result.l8;
+    merged.success = true;
+    merged.reason = "ok";
+    return merged;
+}
+
+void printTaskPreview(const TaskResult& result) {
+    std::cout << "[TASK PREVIEW] " << (result.success ? "success" : "fail")
+              << " reason=" << result.reason << "\n";
+    for (const auto& task : result.tasks) {
+        std::cout << "[TASK PREVIEW] P" << static_cast<int>(task.from)
+                  << " -> L" << static_cast<int>(task.to)
+                  << " bean=" << static_cast<int>(task.bean) << "\n";
+    }
 }
 
 }  // namespace
@@ -142,7 +236,7 @@ bool TaskStateMachine::processCommand(const std::string& line,
             std::cout << "[WARN] expected arrive_bean <image_path>\n";
             return true;
         }
-        return handleArriveDigit(image_path, detector, parser, taskGenerator, protocol, serial, config, force_print);
+        return handleArriveDigit(image_path, taskGenerator, config, force_print);
     }
 
     std::cout << "[WARN] unknown command: " << command << "\n";
@@ -183,7 +277,13 @@ bool TaskStateMachine::processCameraCommand(const std::string& line,
         return processCommand(forwarded, detector, parser, taskGenerator, protocol, serial, config);
     }
     if (command == "arrive_digit") {
-        return processCommand(line, detector, parser, taskGenerator, protocol, serial, config);
+        std::string forwarded = "arrive_digit ";
+        forwarded += image_path.empty() ? "__camera__" : image_path;
+        if (!debug_flag.empty()) {
+            forwarded += " ";
+            forwarded += debug_flag;
+        }
+        return processCommand(forwarded, detector, parser, taskGenerator, protocol, serial, config);
     }
 
     std::cout << "[WARN] unknown command: " << command << "\n";
@@ -235,11 +335,7 @@ bool TaskStateMachine::handleArriveBean(const std::string& image_path,
  * @return 返回 true 表示继续等待后续命令。
  */
 bool TaskStateMachine::handleArriveDigit(const std::string& image_path,
-                                         BeanNumberDetector& detector,
-                                         RoiParser& parser,
                                          TaskGenerator& taskGenerator,
-                                         Protocol& protocol,
-                                         SerialPort& serial,
                                          const AppConfig& config,
                                          bool force_print) {
     if (image_path.empty()) {
@@ -247,26 +343,37 @@ bool TaskStateMachine::handleArriveDigit(const std::string& image_path,
         return true;
     }
 
-    std::cout << "[RX MOCK] ARRIVE_DIGIT image=" << image_path << "\n";
-    cv::Mat frame = cv::imread(image_path);
-    if (frame.empty()) {
-        std::cout << "[ERROR] image not found: " << image_path << "\n";
-        return true;
-    }
-
+    (void)config;
+    (void)force_print;
+    std::cout << "[RX COMMAND] ARRIVE_DIGIT image=" << image_path << "\n";
     setState(TaskState::SCAN_DIGITS);
-    std::vector<Detection> detections = detector.detect(frame);
-    std::cout << "[YOLO] detections=" << detections.size() << "\n";
 
-    VisionResult result = parser.parse(detections);
-    DebugLogger::saveCommandImages("arrive_digit", image_path, frame, detections, result, config, force_print);
-    if (detections.empty()) {
-        std::cout << "[WARN] no YOLO detections\n";
+    VisionResult result;
+    if (!runner_.scanDigits(result)) {
+        std::cout << "[ERROR] digit recognition runner failed\n";
         setState(TaskState::WAIT_DIGIT_COMMAND);
         return true;
     }
 
-    return acceptDigitResult(result, taskGenerator, protocol, serial);
+    printDigitSnapshot(result);
+
+    DigitInference inference;
+    const DigitInferenceResult inference_result = inference.analyze(result);
+    if (!inference_result.complete) {
+        std::cout << "[DIGIT] incomplete: missing "
+                  << formatMissingPlaces(inference_result.missing_places) << "\n";
+        setState(TaskState::WAIT_DIGIT_COMMAND);
+        return true;
+    }
+
+    std::cout << "[DIGIT] complete\n";
+
+    const VisionResult preview_vision = mergeBeanAndDigitResult(memory_.mergedResult(), result);
+    const TaskResult preview_task = taskGenerator.generate(preview_vision);
+    printTaskPreview(preview_task);
+
+    setState(TaskState::WAIT_DIGIT_COMMAND);
+    return true;
 }
 
 bool TaskStateMachine::acceptBeanResult(const VisionResult& result,

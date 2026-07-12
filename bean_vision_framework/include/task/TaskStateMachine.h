@@ -142,21 +142,13 @@ private:
     /**
      * @brief 处理“到达数字区”命令。
      * @param image_path 数字区图片路径。
-     * @param detector 检测器。
-     * @param parser ROI 解析器。
      * @param taskGenerator 任务生成器。
-     * @param protocol 协议打包器。
-     * @param serial 串口发送模块。
      * @param config 总配置。
      * @param force_print 是否强制保存调试图片。
      * @return 命令循环是否继续执行。
      */
     bool handleArriveDigit(const std::string& image_path,
-                           BeanNumberDetector& detector,
-                           RoiParser& parser,
                            TaskGenerator& taskGenerator,
-                           Protocol& protocol,
-                           SerialPort& serial,
                            const AppConfig& config,
                            bool force_print);
 
