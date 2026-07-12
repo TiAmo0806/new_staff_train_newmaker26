@@ -10,18 +10,18 @@
 // 区别由 TEAM 和 TYPE 字段表达，而不是复制两套 CRC/串口代码。
 enum class TeamMode : uint8_t
 {
-    TeamA = 1,
-    TeamB = 2
+    TeamA = 1,  // 先数字后豆子，一次性发送完整结果
+    TeamB = 2   // 黄豆、数字数组、绿豆、白芸豆分阶段发送
 };
 
 // 视觉单向发给电控的业务消息类型。
 enum class VisionMessageType : uint8_t
 {
-    DigitsComplete = 0x10, // 队伍A：五个数字位置已全部稳定
-    BeansComplete = 0x11,  // 队伍A：三个豆子位置已全部稳定
-    BeanDetected = 0x20,   // 队伍B：一个豆子已稳定识别
-    BeanDigitMatch = 0x21, // 队伍B：豆子及其对应数字/数字位置
-    FinalResult = 0x30     // 队伍A：完整豆子、数字和对应位置
+    DigitsComplete = 0x10, // 队伍A：五个数字位置已全部稳定，DATA为5字节数字
+    BeansComplete = 0x11,  // 队伍A：三个豆子位置已全部稳定，DATA为3字节豆子类型
+    BeanCode = 0x20,       // 队伍B：1字节豆子码，1黄豆、2绿豆、3白芸豆
+    DigitLayout = 0x21,    // 队伍B：5字节，place1~place5上各自识别到的数字
+    FinalResult = 0x30     // 队伍A：完整豆子、数字和对应位置，DATA为11字节
 };
 
 // VirtualSerial 在外层继续添加 0xA6 和 CRC16。
@@ -50,7 +50,9 @@ VisionTxPacket buildWorkflowPacket(TeamMode team,
                                    uint8_t sequence,
                                    const std::vector<uint8_t> &data);
 
+// 将队伍模式枚举转为字符串，仅用于日志输出
 const char *teamModeToString(TeamMode mode);
+// 将消息类型枚举转为字符串，仅用于终端调试
 const char *visionMessageTypeToString(VisionMessageType type);
 
 #endif // VISION_PROTOCOL_H

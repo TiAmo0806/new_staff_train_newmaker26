@@ -11,17 +11,17 @@
 
 struct VisionSystemConfig
 {
-    YoloConfig yolo;
-    std::string svmPath;
-    bool useSvm = true;
-    PlannerConfig planner;
+    YoloConfig yolo;            // YOLO ONNX 推理参数：模型路径、输入尺寸、阈值
+    std::string svmPath;        // SVM 模型文件路径（bean_svm.yml）
+    bool useSvm = true;         // 是否启用 SVM 豆子复核
+    PlannerConfig planner;      // 任务规划器参数：稳定帧数
 };
 
 struct VisionFrameResult
 {
-    std::vector<Detection> detections;
-    VisionDecision decision;
-    cv::Mat debugImage;
+    std::vector<Detection> detections;  // 当前帧所有检测框（豆子+数字箱）
+    VisionDecision decision;            // 当前帧的视觉决策（目标箱+偏差）
+    cv::Mat debugImage;                 // 画好框和文字的调试图，可直接 imshow
 };
 
 class VisionSystem
@@ -41,10 +41,10 @@ private:
     void drawResult(cv::Mat &image, const std::vector<Detection> &detections,
                     const VisionDecision &decision) const;
 
-    VisionSystemConfig config_;
-    YoloOrtDetector yolo_;
-    std::unique_ptr<BeanSvmClassifier> svm_;
-    TaskPlanner planner_;
+    VisionSystemConfig config_;                 // 视觉系统配置的只读副本
+    YoloOrtDetector yolo_;                     // YOLO ONNX 推理器
+    std::unique_ptr<BeanSvmClassifier> svm_;   // SVM 分类器，可能为空（未启用时）
+    TaskPlanner planner_;                      // 比赛规则决策器
 };
 
 #endif // VISION_SYSTEM_H

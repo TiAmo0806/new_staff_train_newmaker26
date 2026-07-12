@@ -28,7 +28,7 @@ private:
     // 黄豆/绿豆/白芸豆主要靠颜色区分；
     // 后续如果效果不够，可以在这里继续加纹理、形状特征。
     cv::Mat extractFeature(const cv::Mat &roi) const;
-    cv::Ptr<cv::ml::SVM> svm_;
+    cv::Ptr<cv::ml::SVM> svm_;      // OpenCV SVM 模型指针，空表示未加载
 };
 
 #endif // BEAN_SVM_CLASSIFIER_H

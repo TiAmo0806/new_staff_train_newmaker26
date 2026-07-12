@@ -73,10 +73,10 @@ bool MindVisionCamera::open()
     }
 
     // 根据相机最大分辨率分配 BGR 缓存
-    const int maxW = capability_.sResolutionRange.iWidthMax;
-    const int maxH = capability_.sResolutionRange.iHeightMax;
+    const int maxW = capability_.sResolutionRange.iWidthMax;   // 最大宽度
+    const int maxH = capability_.sResolutionRange.iHeightMax;  // 最大高度
 
-    bgrBuffer_.resize(static_cast<size_t>(maxW) * static_cast<size_t>(maxH) * 3);
+    bgrBuffer_.resize(static_cast<size_t>(maxW) * static_cast<size_t>(maxH) * 3); // 3 通道 BGR
 
     std::cout << "[Camera] 相机打开成功，最大分辨率: "
               << maxW << "x" << maxH << std::endl;
@@ -88,8 +88,8 @@ void MindVisionCamera::close()
 {
     if (handle_ >= 0)
     {
-        CameraUnInit(handle_);
-        handle_ = -1;
+        CameraUnInit(handle_);                  // 释放 MindVision 相机资源
+        handle_ = -1;                           // 标记句柄为未打开
     }
 }
 
@@ -97,7 +97,7 @@ bool MindVisionCamera::read(cv::Mat &image)
 {
     if (handle_ < 0)
     {
-        return false;
+        return false;                           // 相机未打开
     }
 
     tSdkFrameHead head;
@@ -106,15 +106,15 @@ bool MindVisionCamera::read(cv::Mat &image)
     // 从相机获取一帧原始图像
     if (CameraGetImageBuffer(handle_, &head, &raw, 1000) != CAMERA_STATUS_SUCCESS)
     {
-        return false;
+        return false;                           // 取图超时或失败
     }
 
     // 将相机原始图像转换成 BGR8
     const int processStatus = CameraImageProcess(
         handle_,
-        raw,
-        bgrBuffer_.data(),
-        &head
+        raw,                                    // 输入的原始图像数据
+        bgrBuffer_.data(),                      // 输出的 BGR8 缓存
+        &head                                   // 帧头信息（宽、高、格式等）
     );
 
     // 原始 buffer 用完必须释放，否则可能卡帧
@@ -122,15 +122,15 @@ bool MindVisionCamera::read(cv::Mat &image)
 
     if (processStatus != CAMERA_STATUS_SUCCESS)
     {
-        return false;
+        return false;                           // 图像处理失败
     }
 
     // 用 OpenCV Mat 包装 BGR 缓存
     cv::Mat view(
-        head.iHeight,
-        head.iWidth,
-        CV_8UC3,
-        bgrBuffer_.data()
+        head.iHeight,                           // 图像高度
+        head.iWidth,                            // 图像宽度
+        CV_8UC3,                                // 3 通道 8 位无符号整数
+        bgrBuffer_.data()                       // 像素数据指针
     );
 
     // 必须 clone，因为 bgrBuffer_ 下一帧会被覆盖
@@ -143,9 +143,9 @@ void MindVisionCamera::setExposureGain(int exposureUs, int gain)
 {
     if (handle_ < 0)
     {
-        return;
+        return;                                 // 相机未打开，无法设置
     }
 
-    CameraSetExposureTime(handle_, exposureUs);
-    CameraSetAnalogGain(handle_, gain);
+    CameraSetExposureTime(handle_, exposureUs); // 设置曝光时间（微秒）
+    CameraSetAnalogGain(handle_, gain);          // 设置模拟增益
 }

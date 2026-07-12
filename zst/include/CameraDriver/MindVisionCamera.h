@@ -9,9 +9,9 @@
 
 struct CameraConfig
 {
-    int exposureUs = 8000;
-    int gain = 8;
-    bool autoExposure = true;
+    int exposureUs = 8000;      // 手动曝光时间，单位微秒
+    int gain = 8;               // 模拟增益，数值越大画面越亮但噪点越多
+    bool autoExposure = true;   // true 表示使用自动曝光，忽略手动参数
 };
 
 class MindVisionCamera
@@ -34,10 +34,10 @@ public:
     void setExposureGain(int exposureUs, int gain);
 
 private:
-    CameraConfig config_;
-    int handle_ = -1;
-    tSdkCameraCapbility capability_{};
-    std::vector<unsigned char> bgrBuffer_;
+    CameraConfig config_;                       // 曝光/增益配置的只读副本
+    int handle_ = -1;                           // MindVision SDK 相机句柄，-1 表示未打开
+    tSdkCameraCapbility capability_{};         // 相机能力参数：最大分辨率等
+    std::vector<unsigned char> bgrBuffer_;     // BGR 图像缓存，每帧复用避免反复分配
 };
 
 #endif // MINDVISION_CAMERA_H

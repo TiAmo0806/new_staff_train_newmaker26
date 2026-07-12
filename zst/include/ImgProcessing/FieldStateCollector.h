@@ -11,25 +11,29 @@ struct FieldStateCollectorConfig
     // 每个角度累计多少帧后，才提交一次当前角度的稳定结果。
     // 不建议一帧就保存，因为 YOLO 单帧可能偶尔误识别。
     // 例如这里设置 20，表示一个角度连续看 20 帧后再投票。
-    int voteFramesPerAngle = 20;
+    int voteFramesPerAngle = 20;    // 每个观察角度需要累计的帧数
 
     // 某个类别在当前角度至少出现多少帧才可信。
     // 例如 20 帧里至少出现 6 帧，才会被加入本角度结果。
-    int minHitsPerAngle = 6;
+    int minHitsPerAngle = 6;        // 当前角度内最少出现次数阈值
 
-    // 每次豆子角度提交最多接受几个“新豆子”。
-    // 队伍A一次可能看到多个豆子，使用3；队伍B要求“识别一个、发送一个”，使用1。
+    // 每次豆子角度提交最多接受几个”新豆子”。
+    // 队伍A一次可能看到多个豆子，使用3；队伍B要求”识别一个、发送一个”，使用1。
     // 这个限制只影响豆子，不影响数字箱；小于等于0表示不限制。
-    int maxNewBeansPerCommit = 3;
+    int maxNewBeansPerCommit = 3;   // 单次角度提交最多新增的豆子数
+
+    // false（A组）：稳定候选按X从左到右全部处理。
+    // true（B组）：只处理投票次数最多的一个中心候选；若它已识别过，本轮不改选其他豆子。
+    bool selectMostFrequentBeanOnly = false;
 };
 
 struct AngleCommitResult
 {
     // true 表示刚刚完成了一个角度的投票并提交了结果。
-    bool committed = false;
+    bool committed = false;     // 本帧是否触发了一次角度提交
 
     // 当前角度新增了多少个以前没保存过的目标。
-    int addedCount = 0;
+    int addedCount = 0;         // 本次提交新增的目标数量
 };
 
 class FieldStateCollector
@@ -37,8 +41,7 @@ class FieldStateCollector
 public:
     explicit FieldStateCollector(const FieldStateCollectorConfig &config);
 
-    // 豆子阶段调用：累计若干帧后，按画面从左到右保存新豆子。
-    // 适合你的“两次角度看豆子”方案。
+    // 豆子阶段调用：A组按画面从左到右保存；B组由配置只选最稳定的中心候选。
     // 已经保存过的豆子类型会跳过，不会重复占用 bean_place。
     AngleCommitResult addBeanFrame(const std::vector<Detection> &detections);
 
@@ -48,13 +51,13 @@ public:
     // 第二次的 1 和 3 会被跳过，只把 4 放到下一个 box_place。
     AngleCommitResult addBoxFrame(const std::vector<Detection> &detections);
 
-    const FieldState &state() const;
-    bool beanReady() const;
-    bool boxReady() const;
-    bool done() const;
-    int beanCount() const;
-    int boxCount() const;
-    void reset();
+    const FieldState &state() const;     // 获取当前已保存的整场状态
+    bool beanReady() const;              // 三个豆子位置是否已全部填写
+    bool boxReady() const;               // 五个箱子位置是否已全部填写
+    bool done() const;                   // 整场识别是否完成（豆子+箱子都就绪）
+    int beanCount() const;               // 当前已保存的豆子数量
+    int boxCount() const;                // 当前已保存的数字箱数量
+    void reset();                        // 清空所有状态，重新开始
 
 private:
     struct CandidateStat

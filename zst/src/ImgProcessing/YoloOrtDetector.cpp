@@ -12,42 +12,42 @@ namespace
 // 类别编号就是训练数据集 YAML 中 names 的下标，顺序必须与导出 best.onnx 时一致。
 // 前 3 类是豆子，后 5 类是数字箱；若训练时改过 names 顺序，此处也必须同步修改。
 const std::vector<std::string> kClassNames = {
-    "soybean", "mung_bean", "white_kidney_bean",
-    "data_1", "data_2", "data_3", "data_4", "data_5"};
+    "soybean", "mung_bean", "white_kidney_bean",    // 0~2: 豆子类
+    "data_1", "data_2", "data_3", "data_4", "data_5"}; // 3~7: 数字箱类
 
 // IoU = 两框交集面积 / 两框并集面积，范围为 [0, 1]。
 // NMS 用它判断两个候选框是否实际指向同一个目标。
 float iou(const cv::Rect &a, const cv::Rect &b)
  {
-    const int inter = (a & b).area();
-    const int uni = a.area() + b.area() - inter;
-    return uni > 0 ? static_cast<float>(inter) / uni : 0.0f;
+    const int inter = (a & b).area();               // 交集面积
+    const int uni = a.area() + b.area() - inter;    // 并集面积 = A + B - 交集
+    return uni > 0 ? static_cast<float>(inter) / uni : 0.0f; // 避免除零
  }
 }
 
 YoloOrtDetector::YoloOrtDetector(const YoloConfig &config)
     : config_(config),
-      env_(ORT_LOGGING_LEVEL_WARNING, "logistics_yolo"),
+      env_(ORT_LOGGING_LEVEL_WARNING, "logistics_yolo"),     // 创建 ONNX 环境，WARNING 级别日志
       sessionOptions_(),
       session_(nullptr)
 {
     // IntraOpNumThreads 表示单个算子内部用几个线程。
     // 线程太多反而会抢资源，所以这里先用 2，后续可按虚拟机 CPU 数调整。
-    sessionOptions_.SetIntraOpNumThreads(2);
+    sessionOptions_.SetIntraOpNumThreads(2);                 // 算子内线程数
 
     // 开启 ONNX Runtime 图优化，能合并一些算子，CPU 推理会更快。
-    sessionOptions_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+    sessionOptions_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED); // 扩展图优化
 
     // 真正加载 .onnx 模型。如果路径错，这里会直接抛异常。
-    session_ = Ort::Session(env_, config_.modelPath.c_str(), sessionOptions_);
+    session_ = Ort::Session(env_, config_.modelPath.c_str(), sessionOptions_); // 加载 ONNX 模型
 
     // 保存输入/输出节点名，Run 时必须传 const char*。
     // 大部分 YOLO 导出模型只有一个输入和一个输出。
-    auto inputName = session_.GetInputNameAllocated(0, allocator_);
-    auto outputName = session_.GetOutputNameAllocated(0, allocator_);
-    inputNamesText_.push_back(inputName.get());
+    auto inputName = session_.GetInputNameAllocated(0, allocator_);   // 获取第一个输入节点名
+    auto outputName = session_.GetOutputNameAllocated(0, allocator_); // 获取第一个输出节点名
+    inputNamesText_.push_back(inputName.get());                       // 保存到 std::string 容器
     outputNamesText_.push_back(outputName.get());
-    inputNames_.push_back(inputNamesText_[0].c_str());
+    inputNames_.push_back(inputNamesText_[0].c_str());               // 取 c_str 供 Run() 使用
     outputNames_.push_back(outputNamesText_[0].c_str());
 
     std::cout << "[YoloOrt] model loaded: " << config_.modelPath << std::endl;
@@ -62,20 +62,20 @@ cv::Mat YoloOrtDetector::letterbox(const cv::Mat &image, LetterBoxInfo &info) co
     //   不能直接压成 640x640，否则箱子和数字会被横向/纵向拉伸。
     //   letterbox 会缩放成 640x512，再上下补灰边。
     //   这样 YOLO 框的位置更稳定。
-    const float scale = std::min(static_cast<float>(config_.inputWidth) / image.cols,
-                                 static_cast<float>(config_.inputHeight) / image.rows);
-    const int newW = static_cast<int>(std::round(image.cols * scale));
-    const int newH = static_cast<int>(std::round(image.rows * scale));
-    info.scale = scale;
+    const float scale = std::min(static_cast<float>(config_.inputWidth) / image.cols,   // 宽缩放比
+                                 static_cast<float>(config_.inputHeight) / image.rows); // 高缩放比，取较小者
+    const int newW = static_cast<int>(std::round(image.cols * scale));  // 缩放后宽度
+    const int newH = static_cast<int>(std::round(image.rows * scale));  // 缩放后高度
+    info.scale = scale;                                                 // 保存缩放比，后处理需要
     // 整数除法可能让右侧或下侧比另一边多 1 像素，这是奇数余量时的正常现象。
-    info.padX = (config_.inputWidth - newW) / 2;
-    info.padY = (config_.inputHeight - newH) / 2;
+    info.padX = (config_.inputWidth - newW) / 2;                        // 水平灰边宽度
+    info.padY = (config_.inputHeight - newH) / 2;                       // 垂直灰边宽度
 
     cv::Mat resized;
-    cv::resize(image, resized, cv::Size(newW, newH));
+    cv::resize(image, resized, cv::Size(newW, newH));                   // 等比例缩放
     // 114 是 Ultralytics letterbox 常用填充值，能减少填充边缘与训练预处理的差异。
-    cv::Mat out(config_.inputHeight, config_.inputWidth, CV_8UC3, cv::Scalar(114, 114, 114));
-    resized.copyTo(out(cv::Rect(info.padX, info.padY, newW, newH)));
+    cv::Mat out(config_.inputHeight, config_.inputWidth, CV_8UC3, cv::Scalar(114, 114, 114)); // 灰底画布
+    resized.copyTo(out(cv::Rect(info.padX, info.padY, newW, newH)));   // 将缩放图贴到画布中央
     return out;
 }
 
@@ -88,26 +88,26 @@ std::vector<Detection> YoloOrtDetector::infer(const cv::Mat &frame)
     // ONNX Runtime 需要连续的一维 float 数组。
     // YOLO 输入格式通常是 NCHW：[1, 3, H, W]。
     LetterBoxInfo lb;
-    cv::Mat input = letterbox(frame, lb);
-    cv::cvtColor(input, input, cv::COLOR_BGR2RGB);
-    input.convertTo(input, CV_32F, 1.0 / 255.0);
+    cv::Mat input = letterbox(frame, lb);               // 等比例缩放 + 补灰边
+    cv::cvtColor(input, input, cv::COLOR_BGR2RGB);      // BGR -> RGB
+    input.convertTo(input, CV_32F, 1.0 / 255.0);        // 归一化到 [0, 1]
 
     // OpenCV Mat 的布局是 HWC（一个像素的 RGB 连续存放），而 YOLO 输入是 CHW：
     // [R平面全部像素][G平面全部像素][B平面全部像素]。
-    std::vector<float> chw(3 * config_.inputWidth * config_.inputHeight);
-    const int area = config_.inputWidth * config_.inputHeight;
+    std::vector<float> chw(3 * config_.inputWidth * config_.inputHeight); // 3 通道 CHW 数组
+    const int area = config_.inputWidth * config_.inputHeight;            // 单个通道像素数
     for (int y = 0; y < config_.inputHeight; ++y)
     {
-        const cv::Vec3f *row = input.ptr<cv::Vec3f>(y);
+        const cv::Vec3f *row = input.ptr<cv::Vec3f>(y);                  // 第 y 行像素
         for (int x = 0; x < config_.inputWidth; ++x)
         {
             for (int c = 0; c < 3; ++c)
-                chw[c * area + y * config_.inputWidth + x] = row[x][c];
+                chw[c * area + y * config_.inputWidth + x] = row[x][c];  // HWC -> CHW
         }
     }
 
-    std::array<int64_t, 4> inputShape{1, 3, config_.inputHeight, config_.inputWidth};
-    auto memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    std::array<int64_t, 4> inputShape{1, 3, config_.inputHeight, config_.inputWidth}; // NCHW
+    auto memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault); // CPU 内存
 
     // CreateTensor 不复制数据，只是把 chw 包装成 ONNX Runtime 能读的张量。
     // 所以 chw 必须在 Run 结束前一直有效。
@@ -120,11 +120,11 @@ std::vector<Detection> YoloOrtDetector::infer(const cv::Mat &frame)
     //   [1, 12, 8400]  或 [1, 8400, 12]
     // 其中 12 = 4个框参数 + 8个类别分数。
     auto outputs = session_.Run(Ort::RunOptions{nullptr},
-                                inputNames_.data(), &tensor, 1,
-                                outputNames_.data(), 1);
-    const float *data = outputs[0].GetTensorData<float>();
+                                inputNames_.data(), &tensor, 1,          // 1 个输入
+                                outputNames_.data(), 1);                 // 1 个输出
+    const float *data = outputs[0].GetTensorData<float>();               // 获取输出数据指针
     auto shapeInfo = outputs[0].GetTensorTypeAndShapeInfo();
-    return postprocess(data, shapeInfo.GetShape(), lb, frame.size());
+    return postprocess(data, shapeInfo.GetShape(), lb, frame.size());    // 后处理 + 坐标还原
 }
 
 std::vector<Detection> YoloOrtDetector::postprocess(const float *data, const std::vector<int64_t> &shape,
@@ -132,7 +132,7 @@ std::vector<Detection> YoloOrtDetector::postprocess(const float *data, const std
 {
     // 本解析器只接受 YOLOv8 检测模型的三维输出。若模型导出时内置 NMS，
     // 或导出的是分割/姿态模型，输出数量和形状不同，需要单独编写解析逻辑。
-    if (shape.size() != 3) return {};
+    if (shape.size() != 3) return {};                   // 非三维输出，无法解析
 
     // YOLOv8 常见输出：[1, 4+classes, boxes] 或 [1, boxes, 4+classes]。
     // 不同导出方式会转置维度，所以这里兼容两种情况。
@@ -143,14 +143,14 @@ std::vector<Detection> YoloOrtDetector::postprocess(const float *data, const std
     // 因此较小的维度可视为 channels，较大的维度可视为 boxes。
     if (shape[1] < shape[2])
     {
-        channels = static_cast<int>(shape[1]);
-        boxes = static_cast<int>(shape[2]);
-        transposed = true;
+        channels = static_cast<int>(shape[1]);          // 较小维度 = 通道数
+        boxes = static_cast<int>(shape[2]);             // 较大维度 = 候选框数
+        transposed = true;                              // 转置布局：[1, C, N]
     }
     else
     {
-        boxes = static_cast<int>(shape[1]);
-        channels = static_cast<int>(shape[2]);
+        boxes = static_cast<int>(shape[1]);             // 较大维度 = 候选框数
+        channels = static_cast<int>(shape[2]);          // 较小维度 = 通道数
     }
 
     std::vector<cv::Rect> rects;
@@ -164,46 +164,46 @@ std::vector<Detection> YoloOrtDetector::postprocess(const float *data, const std
         // 所以类别分数就是最终置信度。
         // 用统一访问器屏蔽 [1,C,N] 与 [1,N,C] 两种内存布局。
         auto valueAt = [&](int c) {
-            return transposed ? data[c * boxes + i] : data[i * channels + c];
+            return transposed ? data[c * boxes + i] : data[i * channels + c]; // 统一访问
         };
 
-        const float cx = valueAt(0);
-        const float cy = valueAt(1);
-        const float w = valueAt(2);
-        const float h = valueAt(3);
+        const float cx = valueAt(0);                    // 框中心 x（模型坐标）
+        const float cy = valueAt(1);                    // 框中心 y（模型坐标）
+        const float w = valueAt(2);                     // 框宽度（模型坐标）
+        const float h = valueAt(3);                     // 框高度（模型坐标）
 
         // 一个候选框保留得分最高的类别，再用 confThreshold 过滤。
         int bestClass = -1;
         float bestScore = 0.0f;
         for (int c = 0; c < static_cast<int>(kClassNames.size()); ++c)
         {
-            float s = valueAt(4 + c);
+            float s = valueAt(4 + c);                   // 第 c 类的置信度
             if (s > bestScore)
             {
-                bestScore = s;
-                bestClass = c;
+                bestScore = s;                          // 更新最高分
+                bestClass = c;                          // 更新最佳类别
             }
         }
-        if (bestScore < config_.confThreshold) continue;
+        if (bestScore < config_.confThreshold) continue; // 低于置信度阈值，丢弃
 
         // 模型输出是 letterbox 图上的 cx/cy/w/h。
         // 先转成 x1/y1/x2/y2，再减掉灰边，最后除以缩放比例。
-        float x1 = (cx - w * 0.5f - info.padX) / info.scale;
-        float y1 = (cy - h * 0.5f - info.padY) / info.scale;
-        float x2 = (cx + w * 0.5f - info.padX) / info.scale;
-        float y2 = (cy + h * 0.5f - info.padY) / info.scale;
-        x1 = std::clamp(x1, 0.0f, static_cast<float>(imageSize.width - 1));
+        float x1 = (cx - w * 0.5f - info.padX) / info.scale; // 还原左上角 x
+        float y1 = (cy - h * 0.5f - info.padY) / info.scale; // 还原左上角 y
+        float x2 = (cx + w * 0.5f - info.padX) / info.scale; // 还原右下角 x
+        float y2 = (cy + h * 0.5f - info.padY) / info.scale; // 还原右下角 y
+        x1 = std::clamp(x1, 0.0f, static_cast<float>(imageSize.width - 1));  // 裁剪到图像范围内
         y1 = std::clamp(y1, 0.0f, static_cast<float>(imageSize.height - 1));
         x2 = std::clamp(x2, 0.0f, static_cast<float>(imageSize.width - 1));
         y2 = std::clamp(y2, 0.0f, static_cast<float>(imageSize.height - 1));
 
         cv::Rect r(cv::Point(static_cast<int>(x1), static_cast<int>(y1)),
                    cv::Point(static_cast<int>(x2), static_cast<int>(y2)));
-        if (r.area() <= 0) continue;
+        if (r.area() <= 0) continue;                    // 无效框，跳过
 
-        rects.push_back(r);
-        scores.push_back(bestScore);
-        classIds.push_back(bestClass);
+        rects.push_back(r);                             // 保存框坐标
+        scores.push_back(bestScore);                    // 保存置信度
+        classIds.push_back(bestClass);                  // 保存类别编号
     }
 
     // 必须先按置信度降序排列：NMS 永远优先保留更可信的框，再抑制低分重叠框。
@@ -215,7 +215,7 @@ std::vector<Detection> YoloOrtDetector::postprocess(const float *data, const std
     //
     // nmsThreshold 越小，去重越严格；
     // 例如 0.20 会比 0.50 更容易删掉重叠框。
-    // 这里按“同类别”做 NMS，避免豆子框把数字框误删。
+    // 这里按”同类别”做 NMS，避免豆子框把数字框误删。
     std::vector<int> keep;
     for (int idx : order)
     {
@@ -224,11 +224,11 @@ std::vector<Detection> YoloOrtDetector::postprocess(const float *data, const std
         {
             if (classIds[idx] == classIds[kept] && iou(rects[idx], rects[kept]) > config_.nmsThreshold)
             {
-                suppressed = true;
+                suppressed = true;                  // 同类别且 IoU 过高，抑制
                 break;
             }
         }
-        if (!suppressed) keep.push_back(idx);
+        if (!suppressed) keep.push_back(idx);       // 未被抑制，保留
     }
 
     // 将模型类别编号转换为业务层语义，后续 SVM、投票器和串口层无需理解张量。

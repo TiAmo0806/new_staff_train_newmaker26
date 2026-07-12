@@ -64,16 +64,16 @@ private:
                                        const LetterBoxInfo &info, const cv::Size &imageSize) const;
 
     YoloConfig config_;                    // 推理尺寸、阈值及模型路径的只读副本
-    Ort::Env env_;
-    Ort::SessionOptions sessionOptions_;
+    Ort::Env env_;                         // ONNX Runtime 环境，全局唯一
+    Ort::SessionOptions sessionOptions_;   // 会话选项：线程数、图优化级别
     Ort::Session session_;                 // 已加载的 ONNX 计算图；每帧复用，不能重复创建
-    Ort::AllocatorWithDefaultOptions allocator_;
+    Ort::AllocatorWithDefaultOptions allocator_;  // ONNX Runtime 默认内存分配器
     // Text 容器负责字符串生命周期，const char* 容器仅供 Session::Run 调用。
     // 如果只保存 GetInputNameAllocated() 返回的临时指针，离开构造函数后会悬空。
-    std::vector<std::string> inputNamesText_;
-    std::vector<std::string> outputNamesText_;
-    std::vector<const char *> inputNames_;
-    std::vector<const char *> outputNames_;
+    std::vector<std::string> inputNamesText_;    // 输入节点名的 std::string 存储
+    std::vector<std::string> outputNamesText_;   // 输出节点名的 std::string 存储
+    std::vector<const char *> inputNames_;       // 输入节点名指针，供 Run() 使用
+    std::vector<const char *> outputNames_;      // 输出节点名指针，供 Run() 使用
 };
 
 #endif // YOLO_ORT_DETECTOR_H

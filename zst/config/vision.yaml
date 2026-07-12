@@ -21,11 +21,12 @@ serial:
 
 # 两个队伍使用不同 C 板、不同时间上场，但共用视觉程序和物理串口。
 # team_a：全部数字 -> 全部豆子 -> 最终完整结果。
-# team_b：第1豆子 -> 全部数字 -> 第1匹配 -> 后续豆子逐个匹配。
+# team_b：中心第1个豆子 -> 全部数字位置数组 -> 中心剩余新豆子；豆子顺序不固定。
 workflow:
   team_mode: "team_a"                  # 切换为 team_b 即使用第二队流程
   vote_frames_per_stage: 20            # 每个阶段累计多少帧后投票
   min_hits_per_stage: 6                # 目标至少命中多少帧才算稳定
+  team_b_center_width_ratio: 0.40      # 仅B组：只接受画面横向中间40%的豆子，A组不受影响
   session_id: 1                        # 范围1~255；每次重新比赛建议修改，运行时切换自动递增
 
 runtime:
