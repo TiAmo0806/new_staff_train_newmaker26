@@ -113,21 +113,6 @@ static BeanPositionResult computeBeanPositions(const std::vector<Detection>& det
         }
     }
 
-    // ---- 第三轮：空 zone 用缺失豆子类型补位 ----
-    // 缺失类型按顺序填充：黄豆(0) → 绿豆(1) → 白芸豆(2)
-    for (int z = 0; z < 3; ++z) {
-        if (assigned[z] == -1) {
-            for (int t = 0; t < 3; ++t) {
-                if (!typeSeen[t]) {
-                    assigned[z] = 100 + t;  // 标记为"推断"
-                    typeSeen[t] = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    // ---- 输出 ----
     auto getBeanClass = [&](int idx) -> uint8_t {
         if (idx == -1) return 0xFF;
         if (idx >= 100) return static_cast<uint8_t>(idx - 100);  // 推断值
