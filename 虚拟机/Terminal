@@ -1,0 +1,2 @@
+./mvs_openvino_demo ./best_openvino_model/best.xml
+./mvs_openvino_demo ./model1/best.xml
