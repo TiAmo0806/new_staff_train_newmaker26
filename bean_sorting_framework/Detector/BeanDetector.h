@@ -70,7 +70,7 @@
       cv::Mat getDebugImage() const;
       std::vector<Detection> detect(const cv::Mat& img);
       cv::Mat& drawResults(cv::Mat& img, const std::vector<Detection>& rs);
-      bean_sorting::VisionData toVisionData(const Detection& b, uint32_t fid, uint8_t bx) const;
+      bean_sorting::VisionData toVisionData(const Detection& b, uint8_t bx) const;
 
   private:
       DetectorPreprocessor  preproc_;
