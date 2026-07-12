@@ -209,7 +209,7 @@ bool TaskStateMachine::handleArriveBean(const std::string& image_path,
         return true;
     }
 
-    std::cout << "[RX MOCK] ARRIVE_BEAN image=" << image_path << "\n";
+    std::cout << "[RX COMMAND] ARRIVE_BEAN image=" << image_path << "\n";
     setState(TaskState::SCAN_BEANS);
     (void)config;
     (void)force_print;
@@ -297,7 +297,7 @@ bool TaskStateMachine::acceptBeanResult(const VisionResult& result,
         return true;
     }
     for (const auto& bind : memory_.beanBinds()) {
-        std::cout << "[TX MOCK] BEAN_BIND pickup=" << bind.pickup_id
+        std::cout << "[TX BEAN_BIND] pickup=" << bind.pickup_id
                   << " bean=" << bind.bean_class
                   << " target=" << bind.target_digit << "\n";
     }

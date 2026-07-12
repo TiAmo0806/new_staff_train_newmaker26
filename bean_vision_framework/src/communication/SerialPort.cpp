@@ -217,6 +217,8 @@ bool SerialPort::waitForAck(uint8_t expected_cmd, uint8_t expected_seq) {
                 parsed.payload.size() >= 2 &&
                 parsed.payload[0] == expected_cmd &&
                 parsed.payload[1] == expected_seq) {
+                std::cout << "[ACK] received for " << Protocol::commandName(expected_cmd)
+                          << " seq=" << static_cast<int>(expected_seq) << "\n";
                 return true;
             }
         }
