@@ -4,6 +4,34 @@
 #include <iostream>
 #include <memory>
 
+namespace {
+
+const char* purposeName(ImagePurpose purpose) {
+    switch (purpose) {
+    case ImagePurpose::Default:
+        return "default";
+    case ImagePurpose::Beans:
+        return "bean";
+    case ImagePurpose::Digits:
+        return "digit";
+    }
+    return "unknown";
+}
+
+const char* purposeConfigKey(ImagePurpose purpose) {
+    switch (purpose) {
+    case ImagePurpose::Beans:
+        return "bean_path";
+    case ImagePurpose::Digits:
+        return "digit_path";
+    case ImagePurpose::Default:
+        return "source";
+    }
+    return "source";
+}
+
+}  // namespace
+
 /**
  * @brief 构造图像输入管理器。
  * @param config 输入配置，决定输入源类型和路径。
@@ -16,9 +44,10 @@ bool InputManager::loadImageFile(const std::string& path) {
     image_sent_ = false;
     current_image_path_ = path;
     if (image_.empty()) {
-        std::cerr << "Failed to read image: " << path << "\n";
+        std::cerr << "[ERROR] failed to load image path=" << path << "\n";
         return false;
     }
+    std::cout << "[INPUT] loaded image path=" << path << "\n";
     return true;
 }
 
@@ -32,6 +61,9 @@ bool InputManager::selectImageSource(ImagePurpose purpose) {
         path = input_config_.bean_path;
     } else if (purpose == ImagePurpose::Digits && !input_config_.digit_path.empty()) {
         path = input_config_.digit_path;
+    } else if (purpose != ImagePurpose::Default) {
+        std::cout << "[INPUT] " << purposeConfigKey(purpose)
+                  << " empty, fallback to source=" << input_config_.source << "\n";
     }
 
     if (path.empty()) {
@@ -39,9 +71,13 @@ bool InputManager::selectImageSource(ImagePurpose purpose) {
         return false;
     }
     if (path == current_image_path_ && !image_.empty()) {
+        std::cout << "[INPUT] image purpose=" << purposeName(purpose)
+                  << " reuse current path=" << path << "\n";
         image_sent_ = false;
         return true;
     }
+    std::cout << "[INPUT] image purpose=" << purposeName(purpose)
+              << " switch path=" << path << "\n";
     return loadImageFile(path);
 }
 
