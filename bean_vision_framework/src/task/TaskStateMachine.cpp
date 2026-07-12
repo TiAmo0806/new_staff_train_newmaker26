@@ -5,6 +5,7 @@
 
 #include <opencv2/imgcodecs.hpp>
 
+#include <algorithm>
 #include <iostream>
 #include <map>
 #include <sstream>
@@ -87,6 +88,75 @@ void printDigitSnapshot(const VisionResult& result) {
     };
 
     for (const auto& [place_id, label] : place_labels) {
+        const PositionResult& position = digitPositionByPlace(result, place_id);
+        const int digit = digitValue(position);
+        if (digit > 0) {
+            std::cout << "[DIGIT] " << label << " = digit_" << digit << "\n";
+        } else {
+            std::cout << "[DIGIT] " << label << " = unknown\n";
+        }
+    }
+}
+
+void applyInferredDigits(VisionResult& result, const DigitInferenceResult& inference_result) {
+    auto apply = [&](PositionResult& position, int place_id) {
+        const auto it = inference_result.place_to_digit.find(place_id);
+        if (it == inference_result.place_to_digit.end()) {
+            return;
+        }
+        position.valid = true;
+        position.position_id = "L" + std::to_string(place_id);
+        position.class_id = it->second + 2;
+        position.class_name = "digit_" + std::to_string(it->second);
+    };
+
+    for (int place_id : inference_result.inferred_places) {
+        switch (place_id) {
+        case 4:
+            apply(result.l4, place_id);
+            break;
+        case 5:
+            apply(result.l5, place_id);
+            break;
+        case 6:
+            apply(result.l6, place_id);
+            break;
+        case 7:
+            apply(result.l7, place_id);
+            break;
+        case 8:
+            apply(result.l8, place_id);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+void printDigitSnapshot(const VisionResult& result, const DigitInferenceResult& inference_result) {
+    const std::map<int, std::string> place_labels = {
+        {4, "L4"},
+        {5, "L5"},
+        {6, "L6"},
+        {7, "L7"},
+        {8, "L8"},
+    };
+
+    for (const auto& [place_id, label] : place_labels) {
+        const auto digit_it = inference_result.place_to_digit.find(place_id);
+        if (digit_it != inference_result.place_to_digit.end()) {
+            const bool inferred =
+                std::find(inference_result.inferred_places.begin(),
+                          inference_result.inferred_places.end(),
+                          place_id) != inference_result.inferred_places.end();
+            std::cout << "[DIGIT] " << label << " = digit_" << digit_it->second;
+            if (inferred) {
+                std::cout << " inferred";
+            }
+            std::cout << "\n";
+            continue;
+        }
+
         const PositionResult& position = digitPositionByPlace(result, place_id);
         const int digit = digitValue(position);
         if (digit > 0) {
@@ -355,10 +425,9 @@ bool TaskStateMachine::handleArriveDigit(const std::string& image_path,
         return true;
     }
 
-    printDigitSnapshot(result);
-
     DigitInference inference;
     const DigitInferenceResult inference_result = inference.analyze(result);
+    printDigitSnapshot(result, inference_result);
     if (!inference_result.complete) {
         std::cout << "[DIGIT] incomplete: missing "
                   << formatMissingPlaces(inference_result.missing_places) << "\n";
@@ -366,9 +435,15 @@ bool TaskStateMachine::handleArriveDigit(const std::string& image_path,
         return true;
     }
 
-    std::cout << "[DIGIT] complete\n";
+    if (inference_result.inferred) {
+        std::cout << "[DIGIT] complete by inference\n";
+    } else {
+        std::cout << "[DIGIT] complete\n";
+    }
 
-    const VisionResult preview_vision = mergeBeanAndDigitResult(memory_.mergedResult(), result);
+    VisionResult inferred_result = result;
+    applyInferredDigits(inferred_result, inference_result);
+    const VisionResult preview_vision = mergeBeanAndDigitResult(memory_.mergedResult(), inferred_result);
     const TaskResult preview_task = taskGenerator.generate(preview_vision);
     printTaskPreview(preview_task);
 

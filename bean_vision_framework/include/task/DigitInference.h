@@ -10,9 +10,11 @@ struct DigitInferenceResult {
     bool success = false;              // 推断流程是否正常完成。
     bool complete = false;             // L4-L8 是否全部识别到有效数字。
     bool reliable = false;             // 第一版中 complete 即 reliable。
+    bool inferred = false;             // 是否存在基于规则补全出的数字位置。
     std::string reason;                // ok / digit_incomplete 等原因。
     std::map<int, int> place_to_digit; // 4->1, 5->2 ...
     std::vector<int> missing_places;   // 例如 {5, 7}。
+    std::vector<int> inferred_places;  // 例如 {7}，表示该位置数字由规则补全得到。
 };
 
 class DigitInference {

@@ -1,6 +1,7 @@
 #include "task/DigitInference.h"
 
 #include <array>
+#include <set>
 
 namespace {
 
@@ -49,8 +50,49 @@ DigitInferenceResult DigitInference::analyze(const VisionResult& result) const {
         }
     }
 
-    inference.complete = inference.missing_places.empty();
-    inference.reliable = inference.complete;
-    inference.reason = inference.complete ? "ok" : "digit_incomplete";
+    if (inference.missing_places.empty()) {
+        inference.complete = true;
+        inference.reliable = true;
+        inference.reason = "ok";
+        return inference;
+    }
+
+    if (inference.missing_places.size() == 1 && inference.place_to_digit.size() == 4) {
+        std::set<int> seen_digits;
+        bool duplicate = false;
+        for (const auto& [place_id, digit] : inference.place_to_digit) {
+            (void)place_id;
+            if (digit < 1 || digit > 5 || !seen_digits.insert(digit).second) {
+                duplicate = true;
+                break;
+            }
+        }
+
+        if (!duplicate) {
+            std::vector<int> missing_digits;
+            for (int digit = 1; digit <= 5; ++digit) {
+                if (seen_digits.count(digit) == 0) {
+                    missing_digits.push_back(digit);
+                }
+            }
+            if (missing_digits.size() == 1) {
+                const int inferred_place = inference.missing_places.front();
+                const int inferred_digit = missing_digits.front();
+                inference.place_to_digit[inferred_place] = inferred_digit;
+                inference.inferred = true;
+                inference.inferred_places.push_back(inferred_place);
+                inference.missing_places.clear();
+                inference.complete = true;
+                inference.reliable = true;
+                inference.reason = "inferred_missing_digit";
+                return inference;
+            }
+        }
+    }
+
+    inference.complete = false;
+    inference.reliable = false;
+    inference.inferred = false;
+    inference.reason = "digit_incomplete";
     return inference;
 }
