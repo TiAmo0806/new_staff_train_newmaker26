@@ -39,6 +39,22 @@ const char* stateName(TaskState state) {
     return "UNKNOWN";
 }
 
+void printWaitHint(TaskState state) {
+    switch (state) {
+    case TaskState::WAIT_BEAN_COMMAND:
+        std::cout << "[WAIT] type 'arrive_bean' to scan beans, or 'reset'/'quit'\n";
+        break;
+    case TaskState::WAIT_DIGIT_COMMAND:
+        std::cout << "[WAIT] type 'arrive_digit' to scan digits, or 'reset'/'quit'\n";
+        break;
+    case TaskState::DONE:
+        std::cout << "[WAIT] task done, type 'reset' to start a new round or 'quit'\n";
+        break;
+    default:
+        break;
+    }
+}
+
 const PositionResult& digitPositionByPlace(const VisionResult& result, int place_id) {
     switch (place_id) {
     case 4:
@@ -604,6 +620,7 @@ void TaskStateMachine::setState(TaskState next) {
     }
     state_ = next;
     std::cout << "[STATE] " << stateName(state_) << "\n";
+    printWaitHint(state_);
 }
 
 /**
@@ -611,4 +628,5 @@ void TaskStateMachine::setState(TaskState next) {
  */
 void TaskStateMachine::logInitialState() const {
     std::cout << "[STATE] " << stateName(state_) << "\n";
+    printWaitHint(state_);
 }

@@ -24,6 +24,38 @@
 
 namespace {
 
+bool isCameraOrVideoInput(const AppConfig& config) {
+    return config.input.type == "camera" ||
+           config.input.type == "mindvision_camera" ||
+           config.input.type == "video";
+}
+
+bool isImageStyleInput(const AppConfig& config) {
+    return config.input.type == "image" ||
+           config.input.type == "mock";
+}
+
+void printConfigSummary(const AppConfig& config) {
+    std::cout << "[CONFIG] runtime.mode=" << config.runtime.mode << "\n";
+    std::cout << "[CONFIG] input.type=" << config.input.type << "\n";
+    std::cout << "[CONFIG] command.source=" << config.command.source << "\n";
+    std::cout << "[CONFIG] serial.mock=" << (config.serial.mock ? "true" : "false") << "\n";
+    std::cout << "[CONFIG] detector.backend=" << config.detector.backend << "\n";
+}
+
+void printModeSummary(const AppConfig& config) {
+    const bool camera_or_video = isCameraOrVideoInput(config);
+    const bool image_style = isImageStyleInput(config);
+
+    std::string input_label = camera_or_video ? "camera/video" : (image_style ? "image" : config.input.type);
+    std::string command_label =
+        config.command.source == "serial" ? "STM32 serial command" :
+        (config.command.source == "terminal" ? "terminal command" : config.command.source);
+    std::string serial_label = config.serial.mock ? "mock serial" : "real serial";
+
+    std::cout << "[MODE] " << input_label << " + " << command_label << " + " << serial_label << "\n";
+}
+
 void printMainUsage(const char* app) {
     std::cout << "Usage:\n";
     std::cout << "  " << app << " <config_path>\n";
@@ -52,11 +84,26 @@ void printMainUsage(const char* app) {
 /**
  * @brief 打印终端命令模式的可用命令。
  */
-void printTerminalCommands() {
+void printTerminalCommands(const AppConfig& config) {
     std::cout << "Commands:\n";
-    std::cout << "  arrive_bean <image_path> [print]\n";
-    std::cout << "  arrive_digit <image_path> [print]\n";
-    std::cout << "  camera mode: arrive_bean / arrive_digit\n";
+    if (isCameraOrVideoInput(config)) {
+        std::cout << "  arrive_bean\n";
+        std::cout << "  arrive_digit\n";
+        std::cout << "  reset\n";
+        std::cout << "  quit\n";
+        std::cout << "[INFO] image path is not required in camera/video mode\n";
+        return;
+    }
+
+    if (isImageStyleInput(config)) {
+        std::cout << "  arrive_bean <image_path>\n";
+        std::cout << "  arrive_digit <image_path>\n";
+        std::cout << "  reset\n";
+        std::cout << "  quit\n";
+        std::cout << "[INFO] optional flag: [print]\n";
+        return;
+    }
+
     std::cout << "  reset\n";
     std::cout << "  quit\n";
 }
@@ -115,18 +162,16 @@ void runCommandLoop(CommandSource& commandSource,
                     TaskGenerator& taskGenerator,
                     Protocol& protocol,
                     SerialPort& serial,
-                    const AppConfig& config) {
+    const AppConfig& config) {
     if (config.command.source == "terminal") {
-        printTerminalCommands();
+        printTerminalCommands(config);
+    } else if (config.command.source == "serial") {
+        std::cout << "[COMMAND] source=serial, waiting for STM32 commands\n";
+        std::cout << "[COMMAND] supported: ARRIVE_BEAN, ARRIVE_DIGIT, RESET, PING\n";
     }
 
-    const bool single_frame_runner_mode =
-        config.input.type == "mock" ||
-        config.input.type == "image";
-    const bool camera_command_mode =
-        config.input.type == "camera" ||
-        config.input.type == "mindvision_camera" ||
-        config.input.type == "video";
+    const bool single_frame_runner_mode = isImageStyleInput(config);
+    const bool camera_command_mode = isCameraOrVideoInput(config);
     const bool open_input_for_command_mode = single_frame_runner_mode || camera_command_mode;
     if (open_input_for_command_mode && !input.open()) {
         std::cerr << "Input open failed.\n";
@@ -223,7 +268,8 @@ int main(int argc, char** argv) {
 
     try {
         AppConfig config = AppConfig::load(config_path);
-        std::cout << "Runtime mode: " << config.runtime.mode << "\n";
+        printConfigSummary(config);
+        printModeSummary(config);
 
         InputManager input(config.input, config.camera);
         BeanNumberDetector detector(config.detector);
