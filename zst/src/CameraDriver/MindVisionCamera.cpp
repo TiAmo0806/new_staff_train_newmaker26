@@ -14,8 +14,14 @@ MindVisionCamera::~MindVisionCamera()
 
 bool MindVisionCamera::open()
 {
-    // 初始化 MindVision SDK
-    CameraSdkInit(1);
+    if (handle_ >= 0) return true;               // 已打开时避免重复初始化设备
+
+    // SDK全局初始化只做一次；相机掉线重连时只重新枚举并CameraInit设备。
+    if (!sdkInitialized_)
+    {
+        CameraSdkInit(1);
+        sdkInitialized_ = true;
+    }
 
     int count = 1;
     tSdkCameraDevInfo cameraInfo[1] = {};
@@ -104,7 +110,7 @@ bool MindVisionCamera::read(cv::Mat &image)
     BYTE *raw = nullptr;
 
     // 从相机获取一帧原始图像
-    if (CameraGetImageBuffer(handle_, &head, &raw, 1000) != CAMERA_STATUS_SUCCESS)
+    if (CameraGetImageBuffer(handle_, &head, &raw, config_.frameTimeoutMs) != CAMERA_STATUS_SUCCESS)
     {
         return false;                           // 取图超时或失败
     }
@@ -133,8 +139,9 @@ bool MindVisionCamera::read(cv::Mat &image)
         bgrBuffer_.data()                       // 像素数据指针
     );
 
-    // 必须 clone，因为 bgrBuffer_ 下一帧会被覆盖
-    image = view.clone();
+    // main会在下一次read之前完成YOLO/SVM和调试图clone，因此这里可以直接引用复用缓存，
+    // 少做一次整幅图像深拷贝。调用方不能跨越下一次read长期保存这个Mat。
+    image = view;
 
     return true;
 }

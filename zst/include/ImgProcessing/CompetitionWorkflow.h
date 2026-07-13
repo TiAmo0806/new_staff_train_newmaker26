@@ -19,8 +19,6 @@ struct CompetitionWorkflowConfig
     // 默认0.40表示只接受画面横向30%~70%范围内的豆子；A组完全不使用此参数。
     float teamBCenterWidthRatio = 0.40f;
 
-    // 会话号用于区分”上一次任务”和”本次任务”。切换队伍时会自动递增。
-    uint8_t sessionId = 1;                  // 会话编号，0 保留为无效值
 };
 
 class CompetitionWorkflow
@@ -35,17 +33,15 @@ public:
     // 输入 imageWidth：当前原图宽度，仅供B组计算画面中心；A组不会使用。
     // 返回值：本帧新产生的零个或多个串口消息；返回空数组表示尚未满足阶段完成条件。
     //
-    // 为什么返回 vector：队伍A完成豆子阶段时，需要连续产生 BeansComplete 和
-    // FinalResult 两个独立消息，因此单帧可能返回多个 VisionTxPacket。
+    // 返回vector保留了后续一次生成多条消息的扩展能力；当前每个阶段最多产生一帧。
     std::vector<VisionTxPacket> update(const std::vector<Detection> &detections,
                                        int imageWidth);
 
-    // 切换队伍会清空所有识别缓存并开始新会话，防止两队结果混用。
+    // 切换队伍会清空所有识别缓存，防止两队结果混用。
     // 如果目标 mode 与当前一致，则什么也不做，避免误按按键导致识别进度被清空。
     void switchMode(TeamMode mode);
 
-    // 在当前队伍模式下重新开始：清空豆子/数字、投票桶、消息序号和完成状态。
-    // sessionId 不在这里递增；只有 switchMode() 才把它加一。
+    // 在当前队伍模式下重新开始：清空豆子/数字、投票桶和完成状态。
     void reset();
 
     TeamMode mode() const;                  // 获取当前队伍模式
@@ -73,7 +69,7 @@ private:
     // 根据队伍模式创建投票收集器。TeamB 会限制每次提交最多保存一个新豆子。
     FieldStateCollector makeCollector() const;
 
-    // 给业务 DATA 添加协议头字段：版本、队伍、消息类型、session、sequence、长度。
+    // 将业务DATA与CMD组合为最简payload：[CMD][DATA...]。
     VisionTxPacket makePacket(VisionMessageType type, const std::vector<uint8_t> &data);
 
     std::vector<VisionTxPacket> updateTeamA(const std::vector<Detection> &detections);
@@ -84,7 +80,6 @@ private:
     std::vector<uint8_t> digitsData() const;                // 5字节：boxA~boxE的数字
     std::vector<uint8_t> beansData() const;                 // 3字节：bean1~bean3的类型
     std::vector<uint8_t> beanCodeData(int beanIndex) const;     // 1字节：豆子类型码1/2/3
-    std::vector<uint8_t> finalResultData() const;           // 11字节：3豆+5数字+3匹配箱位
 
     // 在 boxPlaces 中查找某个数字位于哪个物理箱位；返回1~5，没找到返回0。
     uint8_t digitPosition(int digit) const;
@@ -93,13 +88,10 @@ private:
     void logDigitLayout() const;
     void logBeanResult(int beanIndex, const char *stage) const;
 
-    CompetitionWorkflowConfig config_; // 当前队伍、投票参数和会话号
+    CompetitionWorkflowConfig config_; // 当前队伍、投票参数和B组中心区域
     FieldStateCollector collector_;    // 跨帧投票及最终 FieldState
     TeamAStage teamAStage_ = TeamAStage::WaitingDigits;
     TeamBStage teamBStage_ = TeamBStage::WaitingFirstBean;
-    // 每生成一条消息加一。0保留不用，255之后重新回到1。
-    // 单向版本暂不等待ACK，但序号便于C板区分新消息和后续扩展去重。
-    uint8_t nextSequence_ = 1;
 };
 
 #endif // COMPETITION_WORKFLOW_H

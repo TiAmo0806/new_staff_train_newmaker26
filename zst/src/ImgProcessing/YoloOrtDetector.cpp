@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <numeric>
+#include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 #include <stdexcept>
 
@@ -31,12 +32,12 @@ YoloOrtDetector::YoloOrtDetector(const YoloConfig &config)
       sessionOptions_(),
       session_(nullptr)
 {
-    // IntraOpNumThreads 表示单个算子内部用几个线程。
-    // 线程太多反而会抢资源，所以这里先用 2，后续可按虚拟机 CPU 数调整。
-    sessionOptions_.SetIntraOpNumThreads(2);                 // 算子内线程数
+    // 0表示使用ONNX Runtime默认线程策略；现场也可在YAML中固定线程数做性能对比。
+    if (config_.intraOpThreads > 0)
+        sessionOptions_.SetIntraOpNumThreads(config_.intraOpThreads);
 
     // 开启 ONNX Runtime 图优化，能合并一些算子，CPU 推理会更快。
-    sessionOptions_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED); // 扩展图优化
+    sessionOptions_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL); // 启用全部安全图优化
 
     // 真正加载 .onnx 模型。如果路径错，这里会直接抛异常。
     session_ = Ort::Session(env_, config_.modelPath.c_str(), sessionOptions_); // 加载 ONNX 模型
@@ -51,6 +52,10 @@ YoloOrtDetector::YoloOrtDetector(const YoloConfig &config)
     outputNames_.push_back(outputNamesText_[0].c_str());
 
     std::cout << "[YoloOrt] model loaded: " << config_.modelPath << std::endl;
+    std::cout << "[YoloOrt] intra-op threads: "
+              << (config_.intraOpThreads > 0 ? std::to_string(config_.intraOpThreads)
+                                             : std::string("auto"))
+              << std::endl;
 }
 
 cv::Mat YoloOrtDetector::letterbox(const cv::Mat &image, LetterBoxInfo &info) const
@@ -83,36 +88,21 @@ std::vector<Detection> YoloOrtDetector::infer(const cv::Mat &frame)
 {
     if (frame.empty()) return {};
 
-    // 1. 图像预处理：BGR -> RGB，HWC -> CHW，归一化到 0~1。
-    // OpenCV 读到的是 BGR，YOLO 训练通常是 RGB。
-    // ONNX Runtime 需要连续的一维 float 数组。
-    // YOLO 输入格式通常是 NCHW：[1, 3, H, W]。
+    // 1. 图像预处理：BGR -> RGB，HWC -> CHW，归一化到0~1。
+    // blobFromImage在OpenCV内部完成通道交换、float转换和CHW排列，
+    // 比逐像素执行三层C++循环更快，输出布局仍是[1,3,H,W]。
     LetterBoxInfo lb;
     cv::Mat input = letterbox(frame, lb);               // 等比例缩放 + 补灰边
-    cv::cvtColor(input, input, cv::COLOR_BGR2RGB);      // BGR -> RGB
-    input.convertTo(input, CV_32F, 1.0 / 255.0);        // 归一化到 [0, 1]
-
-    // OpenCV Mat 的布局是 HWC（一个像素的 RGB 连续存放），而 YOLO 输入是 CHW：
-    // [R平面全部像素][G平面全部像素][B平面全部像素]。
-    std::vector<float> chw(3 * config_.inputWidth * config_.inputHeight); // 3 通道 CHW 数组
-    const int area = config_.inputWidth * config_.inputHeight;            // 单个通道像素数
-    for (int y = 0; y < config_.inputHeight; ++y)
-    {
-        const cv::Vec3f *row = input.ptr<cv::Vec3f>(y);                  // 第 y 行像素
-        for (int x = 0; x < config_.inputWidth; ++x)
-        {
-            for (int c = 0; c < 3; ++c)
-                chw[c * area + y * config_.inputWidth + x] = row[x][c];  // HWC -> CHW
-        }
-    }
+    cv::Mat blob;
+    cv::dnn::blobFromImage(input, blob, 1.0 / 255.0, cv::Size(), cv::Scalar(),
+                           true, false, CV_32F);          // swapRB=true，输出NCHW float
 
     std::array<int64_t, 4> inputShape{1, 3, config_.inputHeight, config_.inputWidth}; // NCHW
     auto memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault); // CPU 内存
 
-    // CreateTensor 不复制数据，只是把 chw 包装成 ONNX Runtime 能读的张量。
-    // 所以 chw 必须在 Run 结束前一直有效。
+    // CreateTensor不复制数据，所以blob必须在Run结束前保持有效。
     Ort::Value tensor = Ort::Value::CreateTensor<float>(
-        memoryInfo, chw.data(), chw.size(), inputShape.data(), inputShape.size());
+        memoryInfo, blob.ptr<float>(), blob.total(), inputShape.data(), inputShape.size());
 
     // 2. ONNX Runtime CPU 推理。当前 Session 没有注册 CUDA Execution Provider，
     // 因此即使机器装有 CUDA 也仍走 CPU；若要 GPU 推理，需要 CUDA 版 ORT 并显式注册 Provider。
@@ -152,6 +142,14 @@ std::vector<Detection> YoloOrtDetector::postprocess(const float *data, const std
         boxes = static_cast<int>(shape[1]);             // 较大维度 = 候选框数
         channels = static_cast<int>(shape[2]);          // 较小维度 = 通道数
     }
+
+    // 本工程固定8类，所以至少需要4个框参数+8个类别分数。
+    // 如果误换成分割/姿态/其他类别数模型，直接报错而不是越界读取张量。
+    const int expectedChannels = 4 + static_cast<int>(kClassNames.size());
+    if (boxes <= 0 || channels < expectedChannels)
+        throw std::runtime_error("unexpected YOLO output shape: channels=" +
+                                 std::to_string(channels) + ", boxes=" +
+                                 std::to_string(boxes));
 
     std::vector<cv::Rect> rects;
     std::vector<float> scores;

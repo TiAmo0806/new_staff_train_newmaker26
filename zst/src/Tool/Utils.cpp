@@ -1,4 +1,5 @@
 #include "Tool/Utils.h"
+#include <algorithm>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -105,6 +106,12 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
             if (c["exposure_us"]) config.camera.exposureUs = c["exposure_us"].as<int>();
             if (c["gain"]) config.camera.gain = c["gain"].as<int>();
             if (c["auto_exposure"]) config.camera.autoExposure = c["auto_exposure"].as<bool>();
+            if (c["frame_timeout_ms"])
+                config.camera.frameTimeoutMs =
+                    std::clamp(c["frame_timeout_ms"].as<int>(), 20, 2000);
+            if (c["reconnect_after_failures"])
+                config.camera.reconnectAfterFailures =
+                    std::clamp(c["reconnect_after_failures"].as<int>(), 1, 100);
         }
         if (y["model"])                         // 模型参数段（YOLO + SVM）
         {
@@ -113,6 +120,9 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
             if (m["svm_path"]) config.vision.svmPath = m["svm_path"].as<std::string>();
             if (m["input_width"]) config.vision.yolo.inputWidth = m["input_width"].as<int>();
             if (m["input_height"]) config.vision.yolo.inputHeight = m["input_height"].as<int>();
+            if (m["intra_op_threads"])
+                config.vision.yolo.intraOpThreads =
+                    std::clamp(m["intra_op_threads"].as<int>(), 0, 64);
             if (m["confidence"]) config.vision.yolo.confThreshold = m["confidence"].as<float>();
             if (m["nms_iou"]) config.vision.yolo.nmsThreshold = m["nms_iou"].as<float>();
             if (m["use_svm"]) config.vision.useSvm = m["use_svm"].as<bool>();
@@ -148,8 +158,6 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
             if (w["team_b_center_width_ratio"])
                 config.workflow.teamBCenterWidthRatio =
                     w["team_b_center_width_ratio"].as<float>();
-            if (w["session_id"])
-                config.workflow.sessionId = static_cast<uint8_t>(w["session_id"].as<int>());
         }
         if (y["planner"])                       // 规划器参数段
         {

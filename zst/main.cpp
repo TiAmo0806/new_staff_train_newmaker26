@@ -13,9 +13,12 @@
 #include "Communication/VirtualSerial.h"
 #include "ImgProcessing/VisionSystem.h"
 #include "Tool/Utils.h"
+#include <chrono>
 #include <iostream>
 #include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
 #include <string>
+#include <thread>
 
 int main(int argc, char **argv)
 {
@@ -82,23 +85,82 @@ int main(int argc, char **argv)
     const std::string windowName = "Logistics Vision";
     if (config.showWindow) cv::namedWindow(windowName, cv::WINDOW_NORMAL); // 创建可缩放窗口
 
+    using Clock = std::chrono::steady_clock;
+    auto statsWindowStart = Clock::now();
+    auto previousFrameEnd = statsWindowStart;
+    int statsFrameCount = 0;
+    int consecutiveCaptureFailures = 0;
+    double captureMsSum = 0.0;
+    double visionMsSum = 0.0;
+    double displayedFps = 0.0;                         // 指数平滑后的实时FPS
+    cv::Mat lastDebugImage;                            // 相机短暂掉线时保持窗口可响应
+
     while (true)
     {
         // 4. 取图。
         // frame 是一帧 BGR 图像，后面会直接送进 YOLO。
-        // 如果取图失败，说明相机超时或连接异常，本帧跳过。
+        // 如果连续取图失败，自动重开相机；失败期间仍调用waitKey，避免窗口假死。
+        const auto captureStart = Clock::now();
         cv::Mat frame;
         if (!camera.read(frame) || frame.empty())
         {
-            std::cerr << "[Main] 相机取图超时" << std::endl;
-            continue;                                   // 跳过本帧，不做推理
+            consecutiveCaptureFailures++;
+            if (consecutiveCaptureFailures == 1 ||
+                consecutiveCaptureFailures >= config.camera.reconnectAfterFailures)
+            {
+                std::cerr << "[CameraWatchdog] 取图失败，连续次数="
+                          << consecutiveCaptureFailures << "/"
+                          << config.camera.reconnectAfterFailures << std::endl;
+            }
+
+            // 原代码在这里直接continue，导致OpenCV窗口不处理事件，只能强制停止。
+            if (config.showWindow)
+            {
+                if (!lastDebugImage.empty()) cv::imshow(windowName, lastDebugImage);
+                const int key = cv::waitKey(1);
+                if (key == 27 || key == 'q' || key == 'Q') break;
+            }
+
+            if (consecutiveCaptureFailures >= config.camera.reconnectAfterFailures)
+            {
+                std::cerr << "[CameraWatchdog] 尝试重新打开相机" << std::endl;
+                camera.close();
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                if (camera.open())
+                {
+                    std::cout << "[CameraWatchdog] 相机重连成功" << std::endl;
+                    consecutiveCaptureFailures = 0;
+                    const auto recoveredAt = Clock::now();
+                    previousFrameEnd = recoveredAt;      // 排除重连时间对FPS平滑值的影响
+                    statsWindowStart = recoveredAt;
+                    statsFrameCount = 0;
+                    captureMsSum = 0.0;
+                    visionMsSum = 0.0;
+                    displayedFps = 0.0;
+                }
+                else
+                {
+                    std::cerr << "[CameraWatchdog] 相机重连失败，1秒后继续尝试" << std::endl;
+                    consecutiveCaptureFailures = config.camera.reconnectAfterFailures;
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+            }
+            continue;
         }
+        const auto captureEnd = Clock::now();
+        const double captureMs =
+            std::chrono::duration<double, std::milli>(captureEnd - captureStart).count();
+        consecutiveCaptureFailures = 0;
 
         // 5. YOLO 检测 + SVM 复核 + 任务规划。
         // result.detections：当前帧所有豆子/数字箱检测框；
         // result.decision：根据比赛规则算出的目标数字箱；
         // result.debugImage：画好框和文字的调试图。
+        const auto visionStart = Clock::now();
         VisionFrameResult result = vision.process(frame); // 完整一帧视觉处理
+        const auto visionEnd = Clock::now();
+        const double visionMs =
+            std::chrono::duration<double, std::milli>(visionEnd - visionStart).count();
 
         // 6. 当前队伍工作流决定"这一帧是否产生阶段消息"。
         // update只处理识别顺序和生成消息，不直接操作串口，因此TeamA/B流程可以独立测试。
@@ -114,6 +176,45 @@ int main(int argc, char **argv)
             if (!serial.sendPacket(tx))                 // 封帧 + CRC + 写入串口
                 std::cerr << "[Main] 工作流消息发送失败" << std::endl;
         }
+
+        // 以完整处理帧的间隔计算实时FPS，再用指数平滑减少数字跳动。
+        const auto frameEnd = Clock::now();
+        const double frameInterval =
+            std::chrono::duration<double>(frameEnd - previousFrameEnd).count();
+        previousFrameEnd = frameEnd;
+        if (frameInterval > 0.0 && frameInterval < 2.0)
+        {
+            const double instantaneousFps = 1.0 / frameInterval;
+            displayedFps = displayedFps <= 0.0
+                ? instantaneousFps
+                : displayedFps * 0.90 + instantaneousFps * 0.10;
+        }
+
+        statsFrameCount++;
+        captureMsSum += captureMs;
+        visionMsSum += visionMs;
+        const double statsSeconds =
+            std::chrono::duration<double>(frameEnd - statsWindowStart).count();
+        if (statsSeconds >= 1.0)
+        {
+            const double windowFps = statsFrameCount / statsSeconds;
+            std::cout << "[Performance] FPS=" << windowFps
+                      << "，capture=" << (captureMsSum / statsFrameCount) << "ms"
+                      << "，vision=" << (visionMsSum / statsFrameCount) << "ms"
+                      << std::endl;
+            statsWindowStart = frameEnd;
+            statsFrameCount = 0;
+            captureMsSum = 0.0;
+            visionMsSum = 0.0;
+        }
+
+        // 在画面左上角第二行显示端到端FPS、取帧耗时和视觉推理耗时。
+        const std::string performanceText = cv::format(
+            "FPS %.1f | CAP %.1f ms | VISION %.1f ms",
+            displayedFps, captureMs, visionMs);
+        cv::putText(result.debugImage, performanceText, cv::Point(20, 75),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.65, cv::Scalar(255, 255, 0), 2);
+        lastDebugImage = result.debugImage;
 
         // 7. 调试窗口显示。
         // 按 ESC / q 退出程序。

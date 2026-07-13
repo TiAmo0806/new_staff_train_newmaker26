@@ -24,10 +24,10 @@ struct SerialConfig
 
 struct VisionTxPacket
 {
-    // 这里只保存业务载荷，不含帧头和 CRC。
+    // 这里只保存[CMD][DATA...]，不含帧头和CRC。
     // buildWorkflowPacket() 负责生成载荷，sendPacket() 负责封帧，职责不要混用，
     // 否则容易发生帧头重复或 CRC 计算范围不一致。
-    std::vector<uint8_t> payload;   // 业务载荷字节（版本+队伍+类型+会话+序号+长度+数据）
+    std::vector<uint8_t> payload;   // 最简业务载荷：[CMD][固定长度DATA]
 };
 
 class VirtualSerial
@@ -45,7 +45,7 @@ public:
 
     // 打包为：[0xA6][payload...][CRC低字节][CRC高字节]。
     // CRC 覆盖帧头和全部 payload，不覆盖末尾两个 CRC 占位字节。
-    // payload 内部已经包含版本、队伍、消息类型、会话、序号和数据长度。
+    // payload内部只有CMD和该CMD对应的固定长度DATA。
     bool sendPacket(const VisionTxPacket &packet, int maxRetries = 3);
 
 private:

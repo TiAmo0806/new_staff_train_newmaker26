@@ -6,12 +6,6 @@
 
 namespace
 {
-// 协议把 session=0 视为无效/未初始化，因此外部即使配置0，也会修正为1。
-uint8_t safeSession(uint8_t value)
-{
-    return value == 0 ? 1 : value;      // 0 被修正为 1，其余不变
-}
-
 // B组从所有豆子中选择“位于中心区域、距离画面中心最近”的唯一目标。
 // 不预设黄豆/绿豆/白芸豆顺序，中心是什么就返回什么；是否已经识别过由收集器判断。
 // 其他豆子不送进FieldStateCollector，因此不会保存、不会标记为已识别，也不会影响后续阶段。
@@ -65,9 +59,7 @@ const char *beanChineseName(BeanType bean)
 CompetitionWorkflow::CompetitionWorkflow(const CompetitionWorkflowConfig &config)
     : config_(config), collector_(makeCollector())
 {
-    // 初始化列表先按传入配置创建 collector_；随后规范化 session 并统一调用 reset，
-    // 让所有状态、投票桶和序号都从确定值开始。
-    config_.sessionId = safeSession(config_.sessionId);     // 确保 session 不为 0
+    // 初始化列表先按传入配置创建collector_，随后规范化中心区域并统一reset。
     config_.teamBCenterWidthRatio =
         std::clamp(config_.teamBCenterWidthRatio, 0.05f, 1.0f);
     reset();
@@ -95,9 +87,7 @@ void CompetitionWorkflow::reset()
     collector_ = makeCollector();                           // 按当前模式重建收集器
     teamAStage_ = TeamAStage::WaitingDigits;                // TeamA 从数字阶段开始
     teamBStage_ = TeamBStage::WaitingFirstBean;             // TeamB 从任意中心豆子开始
-    nextSequence_ = 1;                                      // 序号从 1 开始
-    std::cout << "[Workflow] reset, mode=" << teamModeToString(config_.mode)
-              << ", session=" << static_cast<int>(config_.sessionId);
+    std::cout << "[Workflow] reset, mode=" << teamModeToString(config_.mode);
     if (config_.mode == TeamMode::TeamB)
         std::cout << ", B组中心区域宽度="
                   << (config_.teamBCenterWidthRatio * 100.0f) << "%";
@@ -109,9 +99,7 @@ void CompetitionWorkflow::switchMode(TeamMode mode)
     // 同模式重复选择不重置，防止调试时重复按键丢失已经完成的投票。
     if (config_.mode == mode) return;                       // 模式未变，直接返回
 
-    // 新队伍使用新session。C板即使残留上一场数据，也可以通过session区分。
     config_.mode = mode;                                    // 更新队伍模式
-    config_.sessionId = safeSession(static_cast<uint8_t>(config_.sessionId + 1)); // session 递增
     reset();                                                // 重建所有状态
 }
 
@@ -135,14 +123,8 @@ const FieldState &CompetitionWorkflow::state() const
 VisionTxPacket CompetitionWorkflow::makePacket(VisionMessageType type,
                                                 const std::vector<uint8_t> &data)
 {
-    // sequence表示"本次会话的第几条业务消息"。它不是识别数量，也不是帧号。
-    const uint8_t sequence = nextSequence_++;               // 取当前序号，然后递增
-    if (nextSequence_ == 0) nextSequence_ = 1;              // 序号溢出后回到 1
-
-    std::cout << "[发送准备] team=" << teamModeToString(config_.mode)
-              << ", type=" << visionMessageTypeToString(type)
-              << ", session=" << static_cast<int>(config_.sessionId)
-              << ", seq=" << static_cast<int>(sequence)
+    std::cout << "[发送准备] mode=" << teamModeToString(config_.mode)
+              << ", cmd=" << visionMessageTypeToString(type)
               << ", data=[";
     for (size_t i = 0; i < data.size(); ++i)
     {
@@ -150,7 +132,7 @@ VisionTxPacket CompetitionWorkflow::makePacket(VisionMessageType type,
         std::cout << static_cast<int>(data[i]);
     }
     std::cout << "]" << std::endl;
-    return buildWorkflowPacket(config_.mode, type, config_.sessionId, sequence, data);
+    return buildWorkflowPacket(type, data);
 }
 
 std::vector<VisionTxPacket> CompetitionWorkflow::update(
@@ -198,10 +180,8 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamA(
 
         if (collector_.beanReady())
         {
-            // 先发送"豆子阶段完成"，让C板知道可以进入下一动作；
-            // 再发送完整结果。两者是两帧独立消息，TYPE和SEQUENCE均不同。
+            // A组只发送三个豆子的识别数组，不再发送包含target_place的FinalResult。
             packets.push_back(makePacket(VisionMessageType::BeansComplete, beansData()));
-            packets.push_back(makePacket(VisionMessageType::FinalResult, finalResultData()));
             teamAStage_ = TeamAStage::Finished;             // TeamA 流程结束
         }
     }
@@ -356,20 +336,4 @@ void CompetitionWorkflow::logBeanResult(int beanIndex, const char *stage) const
     else
         std::cout << "，数字位于第" << place << "个位置(place" << place << ")";
     std::cout << std::endl;
-}
-
-std::vector<uint8_t> CompetitionWorkflow::finalResultData() const
-{
-    // DATA布局：
-    //   [0..2]  三个豆子位置的豆子类型
-    //   [3..7]  五个固定箱位A~E上的数字
-    //   [8..10] bean1~bean3各自目标数字所在的物理箱位
-    std::vector<uint8_t> data = beansData();                // 先放 3 字节豆子数据
-    const std::vector<uint8_t> digits = digitsData();
-    data.insert(data.end(), digits.begin(), digits.end());  // 追加 5 字节数字数据
-
-    // 最后三字节分别表示 bean1/2/3 对应数字所在的箱位。
-    for (BeanType bean : collector_.state().beanPlaces)
-        data.push_back(digitPosition(targetDigitForBean(bean))); // 每个豆子的目标箱位
-    return data;
 }

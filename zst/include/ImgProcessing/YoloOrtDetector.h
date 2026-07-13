@@ -21,6 +21,9 @@ struct YoloConfig
     int inputWidth = 640;
     int inputHeight = 640;
 
+    // ONNX Runtime单个算子的CPU线程数；0表示交给运行时按机器核心数自动选择。
+    int intraOpThreads = 0;
+
     // 候选框最低类别置信度。小于该值的框会在 NMS 之前被直接丢弃。
     // 调高可减少误检，调低可减少漏检，比赛现场应结合验证集和实际光照调整。
     float confThreshold = 0.35f;

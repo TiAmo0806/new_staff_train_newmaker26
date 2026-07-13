@@ -2,6 +2,8 @@ camera:
   exposure_us: 8000           #曝光时间8ms
   gain: 8                     #模拟增益
   auto_exposure: true
+  frame_timeout_ms: 200       # 单次等帧超时；比原来的1000ms更快发现USB/相机异常
+  reconnect_after_failures: 5 # 连续失败5次后自动关闭并重新打开相机
 
 model:
   # 相对路径以 zst 项目根目录为基准，由 Utils 自动转换成绝对路径。
@@ -9,6 +11,7 @@ model:
   svm_path: "bean_svm.yml"             # 可选；文件不存在时会退回纯 YOLO
   input_width: 640                      # 必须与 ONNX 导出时的 imgsz/输入宽度一致
   input_height: 640                     # 必须与 ONNX 导出时的 imgsz/输入高度一致
+  intra_op_threads: 0                   # 0=ONNX Runtime自动选择；也可试2/4比较FPS
   confidence: 0.35                      # 类别置信度阈值：越高误检越少、漏检可能越多
   nms_iou: 0.20                         # 同类框 NMS IoU 阈值：越低去重越严格
   use_svm: true                         # 是否用 SVM 覆盖 YOLO 给出的豆子类别
@@ -20,14 +23,13 @@ serial:
   tx_log: true                          # 打印 A6...CRC 的完整十六进制发送帧
 
 # 两个队伍使用不同 C 板、不同时间上场，但共用视觉程序和物理串口。
-# team_a：全部数字 -> 全部豆子 -> 最终完整结果。
+# team_a：全部数字数组 -> 全部豆子数组；不发送对应位置和最终合并帧。
 # team_b：中心第1个豆子 -> 全部数字位置数组 -> 中心剩余新豆子；豆子顺序不固定。
 workflow:
-  team_mode: "team_a"                  # 切换为 team_b 即使用第二队流程
+  team_mode: "team_a"                  # 只选择电脑内部流程，不作为字段发送给电控
   vote_frames_per_stage: 20            # 每个阶段累计多少帧后投票
   min_hits_per_stage: 6                # 目标至少命中多少帧才算稳定
   team_b_center_width_ratio: 0.40      # 仅B组：只接受画面横向中间40%的豆子，A组不受影响
-  session_id: 1                        # 范围1~255；每次重新比赛建议修改，运行时切换自动递增
 
 runtime:
   show_window: true

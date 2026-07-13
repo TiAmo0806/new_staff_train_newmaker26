@@ -56,7 +56,7 @@ bool VirtualSerial::isOpen() const
 
 bool VirtualSerial::sendPacket(const VisionTxPacket &packet, int maxRetries)
 {
-    // 完整协议：A6 + VERSION/TEAM/TYPE/SESSION/SEQ/LEN/DATA + CRC16。
+    // 最简协议：A6 + CMD + 固定长度DATA + CRC16。
     std::vector<uint8_t> frame;
     frame.reserve(packet.payload.size() + 3);                   // 预分配：载荷 + 帧头 + 2字节CRC
     frame.push_back(FRAME_HEADER);                              // [0] 帧头 0xA6
