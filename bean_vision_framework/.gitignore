@@ -30,6 +30,7 @@ build.ninja
 
 # Runtime outputs
 /debug_output/
+/logs/
 *.log
 
 # IDE/editor files
