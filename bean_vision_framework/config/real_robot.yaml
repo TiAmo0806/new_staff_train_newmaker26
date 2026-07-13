@@ -42,6 +42,17 @@ detector:
   class_file: "config/classes.yaml"
 
 roi:
+  # ROI presets:
+  # - config/roi_current_backup.yaml  # backup of current roi.yaml, not a full-view assumption
+  # - config/roi_single_view_4.yaml   # temporary single-view 4-ROI strategy with 4->5 inference
+  # - config/roi_view_1.yaml          # three-view preset, manual debug only
+  # - config/roi_view_2.yaml          # three-view preset, manual debug only
+  # - config/roi_view_3.yaml          # three-view preset, manual debug only
+  #
+  # Note:
+  # Real robot cannot see all 5 digits in one view.
+  # Current code still requires L4~L8 keys to exist in every ROI file.
+  # Three-view fusion is not implemented yet.
   file: "config/roi.yaml"
 
 serial:

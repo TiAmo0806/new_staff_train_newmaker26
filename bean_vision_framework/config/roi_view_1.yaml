@@ -1,0 +1,15 @@
+# Three-view preset: view_1 manual debug only.
+# Semantic focus: the first view mainly checks L4/L5/L6.
+# Current code still visits all L4~L8 keys, so non-focus positions are kept as
+# placeholders instead of being removed.
+pickup_rois:
+  P1: [0, 360, 310, 180]
+  P2: [220, 540, 620, 300]
+  P3: [790, 300, 440, 190]
+
+place_rois:
+  L4: [20, 430, 140, 160]
+  L5: [220, 330, 150, 120]
+  L6: [640, 300, 140, 130]
+  L7: [870, 285, 170, 130]
+  L8: [1120, 270, 140, 120]
