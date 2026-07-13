@@ -223,8 +223,8 @@ cmake --build . -j$(nproc)
 排障入口：
 
 - 规划中的 `DEBUG_GUIDE.md`
-- 当前阶段可先参考旧文档 [调试与排障指南.md](./调试与排障指南.md)
+- 当前阶段可先参考旧文档 [调试与排障指南.md](./debug/调试与排障指南.md)
 
 如果是部署到 NUC，建议同时参考旧文档：
 
-- [NUC部署指南.md](./NUC部署指南.md)
+- [NUC部署指南.md](./deployment/NUC部署指南.md)

@@ -390,5 +390,5 @@ SDK 根目录至少应包含：
 当前阶段可先参考：
 
 - [tools/camera_preview_demo/HARDWARE_DEBUG_NOTE.md](/home/ygk/yolo_competition/bean_vision_framework/tools/camera_preview_demo/HARDWARE_DEBUG_NOTE.md:1)
-- [docs/DEPLOYMENT.md](/home/ygk/yolo_competition/bean_vision_framework/docs/DEPLOYMENT.md:1)
+- [docs/deployment/DEPLOYMENT.md](/home/ygk/yolo_competition/bean_vision_framework/docs/deployment/DEPLOYMENT.md:1)
 - [docs/BUILD_AND_RUN.md](/home/ygk/yolo_competition/bean_vision_framework/docs/BUILD_AND_RUN.md:1)
