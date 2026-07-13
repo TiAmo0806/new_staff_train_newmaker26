@@ -25,6 +25,16 @@
   // ================================================================
   bool BeanSerial::Open() {
       if (IsOpen()) return true;
+      // ---- 新增: 展开通配符 ----
+      if (portName_.find('*') != std::string::npos) {
+          std::string resolved = FindAvailablePort();
+          if (resolved.empty()) {
+              std::cerr << "[BeanSerial] Error: 找不到匹配 " << portName_ << " 的设备" << std::endl;
+              return false;
+          }
+          std::cout << "[BeanSerial] 解析 " << portName_ << " → " << resolved << std::endl;
+          portName_ = resolved;
+      }
 
       fd_ = open(portName_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
       if (fd_ < 0) {
@@ -32,7 +42,7 @@
           return false;
       }
 
-      if (!ConfigurePort()) { Close(); return false; }// ConfigurePort()  → 配置波特率、数据位、停止位
+      if (!ConfigurePort()) { Close(); return false; }
 
       std::cout << "[BeanSerial] 已连接 " << portName_ << std::endl;
       return true;
@@ -54,13 +64,13 @@
           return false;
       }
 
-      cfsetispeed(&tty, B115200);//波特率115200
+      cfsetispeed(&tty, B115200);
       cfsetospeed(&tty, B115200);
 
       tty.c_cflag &= ~PARENB;
       tty.c_cflag &= ~CSTOPB;
       tty.c_cflag &= ~CSIZE;
-      tty.c_cflag |= CS8;//数据位8
+      tty.c_cflag |= CS8;
       tty.c_cflag &= ~CRTSCTS;
       tty.c_cflag |= CREAD | CLOCAL;
 
@@ -70,8 +80,8 @@
       tty.c_oflag &= ~OPOST;
       tty.c_oflag &= ~ONLCR;
 
-      tty.c_cc[VMIN]  = 0;//立即返回
-      tty.c_cc[VTIME] = 0;//等待时间
+      tty.c_cc[VMIN]  = 0;
+      tty.c_cc[VTIME] = 0;
 
       if (tcsetattr(fd_, TCSANOW, &tty) != 0) {
           std::cerr << "[BeanSerial] Error: tcsetattr 失败" << std::endl;
@@ -83,12 +93,10 @@
   }
 
   // ================================================================
-  // 发送数据帧 
+  // 发送数据帧
   // ================================================================
   bool BeanSerial::sendFrame(const uint8_t* frame, size_t len,
                              int maxRetries, const char* label) {
-     //frame: 要发送的数据，len: 数据长度，maxRetries: 最大重试次数，label: 调试标签                         
-      // ---- 模拟模式: 只打印不发送 ----
       if (simulated_) {
           if (txLogEnabled_)
               std::cout << "[BeanSerial] Simulated " << label << " len=" << len << std::endl;
@@ -124,7 +132,6 @@
       std::cerr << "[BeanSerial] Error: " << label
                 << " 发送失败 (" << maxRetries << " retries)" << std::endl;
 
-      // ---- 自动重连 (对标飞镖) ----
       if (autoReconnect_ && TryReconnect()) {
           std::cout << "[BeanSerial] 重连后重试发送..." << std::endl;
           if (write(fd_, frame, len) == static_cast<ssize_t>(len))
@@ -133,7 +140,7 @@
 
       return false;
   }
- //发送视觉检测结果，将DetectResult编码为协议格式
+
   bool BeanSerial::sendVision(const bean_sorting::VisionData& v, int maxRetries) {
       auto buf = bean_sorting::encode_vision(v);
       return sendFrame(buf.data(), buf.size(), maxRetries, "Vision→电控");
@@ -142,6 +149,11 @@
   bool BeanSerial::sendControl(const bean_sorting::ControlData& c, int maxRetries) {
       auto buf = bean_sorting::encode_control(c);
       return sendFrame(buf.data(), buf.size(), maxRetries, "Control→视觉");
+  }
+
+  bool BeanSerial::sendBatch(const std::vector<bean_sorting::BatchEntry>& entries, int maxRetries) {
+      auto buf = bean_sorting::encode_batch(entries);
+      return sendFrame(buf.data(), buf.size(), maxRetries, "Batch→电控");
   }
 
   // ================================================================
@@ -155,10 +167,10 @@
       pfd.fd = fd_;
       pfd.events = POLLIN;
 
-      if (poll(&pfd, 1, timeout_ms) <= 0) return result;//检查是否有可读数据
+      if (poll(&pfd, 1, timeout_ms) <= 0) return result;
 
       int available = 0;
-      if (ioctl(fd_, FIONREAD, &available) != 0 || available <= 0) return result;//ioctl获取可读字节数
+      if (ioctl(fd_, FIONREAD, &available) != 0 || available <= 0) return result;
 
       result.resize(available);
       ssize_t n = read(fd_, result.data(), available);
@@ -170,14 +182,14 @@
   // ================================================================
   // 自动重连 (对标飞镖 TryReconnect + FindAvailablePort)
   // ================================================================
-  std::string BeanSerial::FindAvailablePort() {//自动扫描串口
+  std::string BeanSerial::FindAvailablePort() {
       DIR* dir = opendir("/dev");
       if (!dir) return "";
 
       struct dirent* entry;
       while ((entry = readdir(dir)) != nullptr) {
           std::string name = entry->d_name;
-          if (name.find("ttyACM") == 0 || name.find("ttyUSB") == 0) {//ACM原生串口，USB转串口
+          if (name.find("ttyACM") == 0 || name.find("ttyUSB") == 0) {
               std::string full = "/dev/" + name;
               int testFd = open(full.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
               if (testFd >= 0) {
@@ -190,13 +202,13 @@
       closedir(dir);
       return "";
   }
- //自动重连
+
   bool BeanSerial::TryReconnect() {
       if (!autoReconnect_) return false;
 
       Close();
 
-      constexpr int kMaxWaitMs = 5000;//最多等5S找设备
+      constexpr int kMaxWaitMs = 5000;
       constexpr int kIntervalMs = 200;
       std::string newPort;
       for (int waited = 0; waited < kMaxWaitMs; waited += kIntervalMs) {

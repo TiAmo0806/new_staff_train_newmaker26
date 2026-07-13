@@ -27,6 +27,10 @@
 
       bool sendVision(const bean_sorting::VisionData& v, int maxRetries = 3);
       bool sendControl(const bean_sorting::ControlData& c, int maxRetries = 3);
+
+      // 批量帧: 4个数字+1个缺失推理一次性打包发送
+      bool sendBatch(const std::vector<bean_sorting::BatchEntry>& entries, int maxRetries = 3);
+
       std::vector<uint8_t> recvRaw(int timeout_ms = 50);
 
   private:
