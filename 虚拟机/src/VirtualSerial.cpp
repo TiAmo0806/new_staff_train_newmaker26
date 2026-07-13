@@ -1,8 +1,8 @@
 /**
  * @file VirtualSerial.cpp
  * @brief 串口通信类实现（仅发送检测排序结果）
- * @author hxl
- * @date 2026-7-12
+ * @author lxy
+ * @date 2025-10-24
  */
 
 #include "VirtualSerial.h"
@@ -85,9 +85,9 @@ bool VirtualSerial::sendDetectionOrder(const std::vector<int>& classIds,
     }
 
     size_t n = classIds.size();
-    if (n > 10) {   // SendPacket::class_ids[10] 最多 10 个
+    if (n > 4) {   // SendPacket::class_ids[4] 最多 4 个
         std::cerr << "[VirtualSerial] Error: Too many objects (" << n
-                  << "), max 10" << std::endl;
+                  << "), max 4" << std::endl;
         return false;
     }
 

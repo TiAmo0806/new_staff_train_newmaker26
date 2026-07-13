@@ -11,10 +11,11 @@
 #include <vector>
 
 /**
- * @brief 检测排序结果发送帧
+ * @brief 检测排序结果发送帧（固定 8 字节）
  *
  * 帧格式（小端序）：
- *   [header 0xA5] [count 1B] [classId0..classIdN] [CRC16 2B]
+ *   [header 0xA5] [count 1B] [id0][id1][id2][id3] [CRC16 2B]
+ *   总计固定 8 字节，未使用的 class_id 填充 9（哨兵值）
  *
  * 使用方式：
  *   SendPacket packet;
@@ -22,43 +23,50 @@
  *   packet.class_ids[0] = 1;
  *   packet.class_ids[1] = 3;
  *   packet.class_ids[2] = 4;
- *   auto data = toVector(packet);  // 自动计算 CRC16
+ *   // class_ids[3] 自动填充为 9
+ *   auto data = toVector(packet);  // 自动计算 CRC16，返回 8 字节
  */
 struct SendPacket
 {
   uint8_t header = 0xA5;
   uint8_t count = 0;
-  uint8_t class_ids[10] = {0};   // 最多 10 个检测物品
+  uint8_t class_ids[4] = {0};   // 最多 4 个检测物品
 } __attribute__((packed));
 
 /**
- * @brief 将 SendPacket 序列化为字节 vector（自动附加 CRC16）
+ * @brief 将 SendPacket 序列化为固定 8 字节数组（自动附加 CRC16）
  *
- * @param packet  已填充的 SendPacket（header、count、class_ids）
- * @return        可直接通过串口发送的字节序列
+ * @param packet  已填充的 SendPacket
+ * @return        固定 8 字节的串口帧
  *
  * 内部流程：
- *   1. CRC16 校验：对 header + count + class_ids[0..count-1] 计算校验码
- *   2. 拼接输出：数据 + CRC16（2 字节，小端序）
+ *   1. 未使用的 class_ids 位置填充 9（哨兵值，区分类别 0=黄豆）
+ *   2. CRC16 对前 6 字节（header + count + 4 个 class_ids）计算校验码
+ *   3. 拼接输出：6 字节数据 + CRC16（2 字节，小端序）= 固定 8 字节
  */
 inline std::vector<uint8_t> toVector(SendPacket & packet)
 {
-  // CRC 计算范围：header(1) + count(1) + 实际 class_ids(count)
-  size_t data_len = 2 + packet.count;
+  constexpr size_t DATA_LEN  = 6;   // header(1) + count(1) + class_ids[4](4)
+  constexpr size_t TOTAL_LEN = 8;   // DATA_LEN + CRC16(2)
+
+  // 未使用的 class_id 位置填充 9（避免与真实类别 0~6 混淆）
+  for (int i = packet.count; i < 4; ++i)
+    packet.class_ids[i] = 9;
+
+  // CRC16 对固定 6 字节计算
   uint16_t crc = crc16::Get_CRC16_Check_Sum(
     reinterpret_cast<uint8_t *>(&packet),
-    static_cast<uint32_t>(data_len),
+    DATA_LEN,
     0xFFFF);
 
-  // 输出：数据 + CRC16 低字节 + CRC16 高字节（小端序）
-  size_t total_len = data_len + 2;
-  std::vector<uint8_t> data(total_len);
+  // 输出固定 8 字节：6 字节数据 + 2 字节 CRC（小端序）
+  std::vector<uint8_t> data(TOTAL_LEN);
   std::copy(
     reinterpret_cast<const uint8_t *>(&packet),
-    reinterpret_cast<const uint8_t *>(&packet) + data_len,
+    reinterpret_cast<const uint8_t *>(&packet) + DATA_LEN,
     data.begin());
-  data[total_len - 2] = static_cast<uint8_t>(crc & 0x00FF);         // CRC 低字节
-  data[total_len - 1] = static_cast<uint8_t>((crc >> 8) & 0x00FF);  // CRC 高字节
+  data[TOTAL_LEN - 2] = static_cast<uint8_t>(crc & 0x00FF);         // CRC 低字节
+  data[TOTAL_LEN - 1] = static_cast<uint8_t>((crc >> 8) & 0x00FF);  // CRC 高字节
 
   return data;
 }

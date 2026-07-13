@@ -1,0 +1,4 @@
+./mvs_openvino_demo ./best_openvino_model/best.xml
+./mvs_openvino_demo ./model1/best.xml
+ sudo chmod 666 /dev/ttyACM0
+  cat /dev/ttyACM0 | xxd
