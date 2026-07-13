@@ -64,8 +64,12 @@ initDetector(YOLODetector& detector,
 }
 
 
-static bool initSerial(SerialPort& serial, const std::string& port)
+static bool initSerial(SerialPort& serial, const std::string& port,
+                        const VisionConfig& cfg)
 {
+    serial.setReconnectCooldownMs(cfg.serial_reconnect_cooldown_ms);
+    serial.setMaxReconnectAttempts(cfg.serial_max_reconnect_attempts);
+
     bool ok = serial.open(port);
     if (ok)
         std::cout << "串口已打开 (" << port << ")" << std::endl;
@@ -148,7 +152,7 @@ static void sendCommand(const std::string& targetName,
     auto data   = path_serial_driver::pack(packet);   // CRC16 + 序列化
 
     if (serialOk) {
-        serial.sendPacket(data);   // 重试 + 重连 + 日志 由 serial 内部处理
+        serial.transmit(data);   // 重试 + 重连 + 日志 由 serial 内部处理
         return;
     }
 
@@ -306,7 +310,7 @@ int main()
               << cfg.input_height << ")" << std::endl;
 
     SerialPort serial;
-    bool serialOk = initSerial(serial, "/dev/gimbal");
+    bool serialOk = initSerial(serial, "/dev/gimbal", cfg);
 
     // 进入主循环（所有权移交）
     runLoop(cam, detector, serial,

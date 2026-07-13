@@ -24,6 +24,13 @@
  * @param serialOk  串口是否正常
  * @param fps       当前帧率
  */
+/**
+ * @brief 生成类别颜色表（HSV 色相均匀分布）
+ * @param numClasses 类别数量
+ * @return 每个类别对应的 BGR 颜色
+ */
+std::vector<cv::Scalar> buildColorTable(int numClasses);
+
 void drawDebug(cv::Mat& frame,
                const std::vector<Detection>& dets,
                const StableTracker& tracker,

@@ -36,10 +36,26 @@ cv::Mat preprocess(
 
     // ---- CLAHE 直方图均衡化（增强光照鲁棒性）----
     cv::Mat lab;
+    /*
+    L（亮度）：从黑到白，0~100。
+    a（绿色→红色）：负值偏绿，正值偏红。
+    b（蓝色→黄色）：负值偏蓝，正值偏黄。
+    */
     cv::cvtColor(image, lab, cv::COLOR_BGR2Lab);
     std::vector<cv::Mat> lab_channels;
     cv::split(lab, lab_channels);
     auto clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
+    /*
+    cv::createCLAHE：OpenCV 提供的工厂函数，创建一个 CLAHE 算法的“处理器”对象。
+    参数 1 2.0：剪裁限制（clipLimit）。这是 CLAHE 最重要的参数！它控制“对比度增强的强度”。
+    CLAHE 会把图像的直方图（亮度分布）切成许多小格子，在每个格子里把亮度分布“拉平”以增强对比度。
+    clipLimit 限制每个灰度级最多被“拉高”多少倍。值越大，增强越剧烈，但也会放大噪声。
+    2.0 是一个温和的工业值（适合嵌入式设备），如果需要更强，可以提到 3.0；如果图像已经比较亮，可以降到 1.5。
+    参数 2 cv::Size(8, 8)：网格大小（tileGridSize）。CLAHE 会把图像分成 8×8 的小块，
+    在每个小块里分别做直方图均衡化，然后平滑拼接。
+    网格越细（比如 4×4），局部对比度增强越强，但计算量更大，且可能产生块状伪影。
+    8×8 是 OpenCV 官方推荐的平衡值（计算快、效果均匀）。
+    */
     clahe->apply(lab_channels[0], lab_channels[0]);  // 只均衡 L（亮度）通道
     cv::merge(lab_channels, lab);
     cv::Mat equalized;

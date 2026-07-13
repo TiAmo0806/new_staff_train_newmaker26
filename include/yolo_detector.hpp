@@ -146,7 +146,7 @@ public:
                 confidenceThreshold, nmsThreshold_,
                 usedClasses_);
         }
-        //通过后处理（parseYOLOv8Output）把 8400 个的候选框，精挑细选成几个精准的检测框
+       
     }
 
     //设置 NMS 阈值

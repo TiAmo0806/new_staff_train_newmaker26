@@ -120,7 +120,7 @@ bool SerialPort::send(const uint8_t* data, size_t len) {
 }
 
 //  数据包发送（重试 + 重连 + TX 日志）
-bool SerialPort::sendPacket(const std::vector<uint8_t>& data,
+bool SerialPort::transmit(const std::vector<uint8_t>& data,
                             int maxRetries) {
     // 1. TX 调试日志
     if (txLogEnabled_) {
@@ -144,8 +144,10 @@ bool SerialPort::sendPacket(const std::vector<uint8_t>& data,
 
     // 2. 发送 + 重试
     for (int retry = 0; retry < maxRetries; ++retry) {
-        if (send(data.data(), data.size()))
+        if (send(data.data(), data.size())) {
+            reconnectFailCount_ = 0;   // 发送成功，清零失败计数
             return true;
+        }
         if (retry < maxRetries - 1)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -153,12 +155,40 @@ bool SerialPort::sendPacket(const std::vector<uint8_t>& data,
     std::cerr << "[SerialPort] Error: 发送失败 (" << maxRetries
               << " 次重试)" << std::endl;
 
-    // 3. 自动重连并再试一次
-    if (autoReconnect_ && tryReconnect()) {
+    // 3. 自动重连（带冷却 + 最大次数保护）
+    if (!autoReconnect_) return false;
+
+    // 3a. 冷却检查：两次重连之间至少间隔 reconnectCooldownMs_
+    auto now = std::chrono::steady_clock::now();
+    if (lastReconnectAttempt_.time_since_epoch().count() > 0) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           now - lastReconnectAttempt_).count();
+        if (elapsed < reconnectCooldownMs_) {
+            // 冷却中，跳过本次重连（不打印，避免刷屏）
+            return false;
+        }
+    }
+
+    // 3b. 上限检查：连续失败超过 maxReconnectAttempts_ 次，进入降级模式
+    if (reconnectFailCount_ >= maxReconnectAttempts_) {
+        std::cerr << "[SerialPort] 连续重连失败 " << reconnectFailCount_
+                  << " 次（上限 " << maxReconnectAttempts_
+                  << "），进入降级模式（只显示不发送）" << std::endl;
+        autoReconnect_ = false;
+        return false;
+    }
+
+    // 3c. 执行重连
+    lastReconnectAttempt_ = now;
+    if (tryReconnect()) {
         std::cout << "[SerialPort] 重连成功，重试发送..." << std::endl;
+        reconnectFailCount_ = 0;
         return send(data.data(), data.size());
     }
 
+    reconnectFailCount_++;
+    std::cerr << "[SerialPort] 重连失败 (" << reconnectFailCount_
+              << "/" << maxReconnectAttempts_ << ")" << std::endl;
     return false;
 }
 

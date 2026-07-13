@@ -41,12 +41,13 @@ struct VisionConfig
     //相机重连参数
     int reconnect_threshold = 50;         // 连续空帧阈值
     int reconnect_delay_ms = 500;         // 重连前等待时间(ms)
+
+    //串口重连参数
+    int serial_reconnect_cooldown_ms = 5000;   // 重连冷却时间(ms)，避免频繁重连
+    int serial_max_reconnect_attempts = 10;    // 最大连续重连次数，超限进入降级模式
 };
 
 //加载参数函数声明
 VisionConfig loadVisionConfig(const std::string& filepath = "config/vision_config.yaml");
-
-//颜色表生成函数声明
-std::vector<cv::Scalar> buildColorTable(int numClasses);
 
 #endif  // CONFIG_HPP_

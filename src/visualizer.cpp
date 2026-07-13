@@ -7,6 +7,21 @@
 #include <cstdio>
 #include <string>
 
+//  生成颜色表（每个类别一种颜色，通过 HSV 色相均匀分布）
+std::vector<cv::Scalar> buildColorTable(int numClasses)
+{
+    std::vector<cv::Scalar> colors;
+    for (int i = 0; i < numClasses; ++i) {
+        // 在 HSV 空间中均匀分布色相
+        int hue = static_cast<int>(180.0 * i / numClasses);
+        cv::Mat hsv(1, 1, CV_8UC3, cv::Scalar(hue, 255, 255));
+        cv::Mat bgr;
+        cv::cvtColor(hsv, bgr, cv::COLOR_HSV2BGR);
+        colors.push_back(cv::Scalar(bgr.at<cv::Vec3b>(0)));
+    }
+    return colors;
+}
+
 void drawDebug(cv::Mat& frame,
                const std::vector<Detection>& dets,
                const StableTracker& tracker,

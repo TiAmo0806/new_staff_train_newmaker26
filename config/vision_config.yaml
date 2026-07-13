@@ -16,3 +16,7 @@ display:
 camera:
   reconnect_threshold: 50      # 连续空帧阈值（达到后触发重连）
   reconnect_delay_ms: 500      # 重连前等待时间(ms)，给驱动释放资源的时间
+
+serial:
+  reconnect_cooldown_ms: 5000       # 重连冷却时间(ms)，两次重连的最小间隔
+  max_reconnect_attempts: 10        # 最大连续失败次数，超过后进入降级模式（只显示不发送）

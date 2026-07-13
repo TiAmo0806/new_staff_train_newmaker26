@@ -34,6 +34,13 @@ VisionConfig loadVisionConfig(const std::string& filepath)
             if (root["camera"]["reconnect_delay_ms"])
                 cfg.reconnect_delay_ms = root["camera"]["reconnect_delay_ms"].as<int>();
         }
+        if (root["serial"])
+        {
+            if (root["serial"]["reconnect_cooldown_ms"])
+                cfg.serial_reconnect_cooldown_ms = root["serial"]["reconnect_cooldown_ms"].as<int>();
+            if (root["serial"]["max_reconnect_attempts"])
+                cfg.serial_max_reconnect_attempts = root["serial"]["max_reconnect_attempts"].as<int>();
+        }
         if (root["display"])
         {
             if (root["display"]["font_scale"])
@@ -53,17 +60,3 @@ VisionConfig loadVisionConfig(const std::string& filepath)
     return cfg;
 }
 
-//  生成颜色表（每个类别一种颜色，通过 HSV 色相均匀分布）
-std::vector<cv::Scalar> buildColorTable(int numClasses)
-{
-    std::vector<cv::Scalar> colors;
-    for (int i = 0; i < numClasses; ++i) {
-        // 在 HSV 空间中均匀分布色相
-        int hue = static_cast<int>(180.0 * i / numClasses);
-        cv::Mat hsv(1, 1, CV_8UC3, cv::Scalar(hue, 255, 255));
-        cv::Mat bgr;
-        cv::cvtColor(hsv, bgr, cv::COLOR_HSV2BGR);
-        colors.push_back(cv::Scalar(bgr.at<cv::Vec3b>(0)));
-    }
-    return colors;
-}
