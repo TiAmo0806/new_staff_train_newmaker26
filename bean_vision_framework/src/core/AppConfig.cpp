@@ -319,7 +319,7 @@ AppConfig AppConfig::load(const std::string& path) {
     std::string roi_file = "config/roi.yaml";
     std::string serial_file;
 
-        // 解析 app.yaml 的顶层 section，例如 runtime/input/command/detector/roi/serial/debug。
+        // 解析 app.yaml 的顶层 section，例如 runtime/input/command/detector/roi/serial/debug/preview。
     std::string line;
     while (std::getline(in, line)) {
         const std::string raw_line = stripCommentKeepIndent(line);
@@ -493,6 +493,16 @@ AppConfig AppConfig::load(const std::string& path) {
                 config.debug.show_mouse_position = parseBool(value);
             } else if (key == "output_dir") {
                 config.debug.output_dir = unquote(value);
+            }
+        } else if (section == "preview") {
+            if (key == "draw_roi") {
+                config.preview.draw_roi = parseBool(value);
+            } else if (key == "yolo_enable") {
+                config.preview.yolo_enable = parseBool(value);
+            } else if (key == "draw_boxes") {
+                config.preview.draw_boxes = parseBool(value);
+            } else if (key == "print_detections") {
+                config.preview.print_detections = parseBool(value);
             }
         }
     }

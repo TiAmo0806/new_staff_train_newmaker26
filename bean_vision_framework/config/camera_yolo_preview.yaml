@@ -1,5 +1,5 @@
 runtime:
-  mode: "camera_preview_demo"
+  mode: "camera_yolo_preview"
 
 input:
   type: "mindvision_camera"
@@ -13,19 +13,32 @@ camera:
   fps: 30
   exposure:
     auto: false
-    time: 10000
+    time: 14000
   gain:
     auto: false
-    value: 4
+    value: 1.0
   white_balance:
     auto: false
   image:
     flip_horizontal: false
     flip_vertical: false
-    rotate: 180
+    rotate: 0
 
 roi:
   file: "config/roi_single_view_4.yaml"
+
+detector:
+  backend: "onnxruntime"
+  model_path: "../bisai/bean_digit_v1_verified_20260624/best.onnx"
+  conf_threshold: 0.25
+  nms_threshold: 0.45
+  class_file: "config/classes.yaml"
+
+preview:
+  draw_roi: true
+  yolo_enable: true
+  draw_boxes: true
+  print_detections: true
 
 debug:
   show_window: true
@@ -33,4 +46,4 @@ debug:
   save_raw_frame: false
   save_result_image: false
   show_mouse_position: true
-  output_dir: "debug_output/camera_preview"
+  output_dir: "debug_output/camera_yolo_preview"

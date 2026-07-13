@@ -1,4 +1,5 @@
 #include "core/AppConfig.h"
+#include "detector/BeanNumberDetector.h"
 #include "input/InputManager.h"
 #include "utils/DrawUtils.h"
 
@@ -8,6 +9,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <sstream>
 
 namespace {
@@ -51,6 +53,34 @@ void printUsage(const char* app) {
     std::cout << "Keys: s=save current frame, r=reload config/roi, q=quit\n";
 }
 
+void printPreviewSummary(const AppConfig& config) {
+    std::cout << "[PREVIEW] input.type=" << config.input.type << "\n";
+    std::cout << "[PREVIEW] draw_roi=" << (config.preview.draw_roi ? "true" : "false") << "\n";
+    std::cout << "[PREVIEW] yolo_enable=" << (config.preview.yolo_enable ? "true" : "false") << "\n";
+    std::cout << "[PREVIEW] draw_boxes=" << (config.preview.draw_boxes ? "true" : "false") << "\n";
+    std::cout << "[PREVIEW] print_detections=" << (config.preview.print_detections ? "true" : "false") << "\n";
+
+    if (config.preview.yolo_enable) {
+        std::cout << "[YOLO] backend=" << config.detector.backend << "\n";
+        std::cout << "[YOLO] model=" << config.detector.model_path << "\n";
+        std::cout << "[YOLO] conf_threshold=" << config.detector.conf_threshold << "\n";
+        std::cout << "[YOLO] nms_threshold=" << config.detector.nms_threshold << "\n";
+    }
+}
+
+void printDetectionsSummary(const std::vector<Detection>& detections) {
+    std::cout << "[YOLO] detections=" << detections.size() << "\n";
+    for (const auto& detection : detections) {
+        std::cout << "  class=" << detection.class_name
+                  << " id=" << detection.class_id
+                  << " conf=" << detection.confidence
+                  << " box=[" << detection.box.x
+                  << "," << detection.box.y
+                  << "," << detection.box.width
+                  << "," << detection.box.height << "]\n";
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -61,6 +91,17 @@ int main(int argc, char** argv) {
     }
 
     AppConfig config = AppConfig::load(config_path);
+    printPreviewSummary(config);
+
+    std::unique_ptr<BeanNumberDetector> detector;
+    if (config.preview.yolo_enable) {
+        detector = std::make_unique<BeanNumberDetector>(config.detector);
+        if (!detector->loadModel()) {
+            std::cerr << "[ERROR] failed to load YOLO detector for camera preview demo.\n";
+            return 1;
+        }
+    }
+
     InputManager input(config.input, config.camera);
     if (!input.open()) {
         std::cerr << "Input open failed.\n";
@@ -84,7 +125,20 @@ int main(int argc, char** argv) {
         }
 
         cv::Mat visual = frame.clone();
-        DrawUtils::drawRois(visual, config.roi);
+        std::vector<Detection> detections;
+        if (detector != nullptr) {
+            detections = detector->detect(frame);
+            if (config.preview.print_detections) {
+                printDetectionsSummary(detections);
+            }
+            if (config.preview.draw_boxes) {
+                DrawUtils::drawDetections(visual, detections);
+            }
+        }
+
+        if (config.preview.draw_roi) {
+            DrawUtils::drawRois(visual, config.roi);
+        }
         drawMouseOverlay(visual);
 
         if (config.debug.show_window) {
@@ -107,6 +161,7 @@ int main(int argc, char** argv) {
             config = AppConfig::load(config_path);
             g_mouse_state.enabled = config.debug.show_mouse_position;
             std::cout << "[RELOAD] " << config_path << "\n";
+            std::cout << "[RELOAD] restart demo to apply yolo_enable/model changes\n";
         }
     }
 

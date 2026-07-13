@@ -68,6 +68,7 @@ add_executable(camera_preview_demo
     src/camera/CameraManager.cpp
     src/core/AppConfig.cpp
     src/core/DetectionTypes.cpp
+    src/detector/BeanNumberDetector.cpp
     src/input/InputManager.cpp
     src/utils/DrawUtils.cpp
 )
@@ -88,6 +89,7 @@ foreach(target_name IN ITEMS bean_vision_framework camera_preview_demo)
 endforeach()
 
 target_link_libraries(bean_vision_framework PRIVATE ${ONNXRUNTIME_LIB})
+target_link_libraries(camera_preview_demo PRIVATE ${ONNXRUNTIME_LIB})
 
 if(BVP_MINDVISION_AVAILABLE)
     foreach(target_name IN ITEMS bean_vision_framework camera_preview_demo)

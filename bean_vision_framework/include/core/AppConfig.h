@@ -132,6 +132,18 @@ struct DebugConfig {
 };
 
 /**
+ * @brief 预览 demo 配置。
+ *
+ * 只用于 camera_preview_demo 一类独立调试工具，不参与主业务流程。
+ */
+struct PreviewConfig {
+    bool draw_roi = true;           // 是否绘制 ROI 参考框。
+    bool yolo_enable = false;       // 是否启用 YOLO 实时检测。
+    bool draw_boxes = true;         // 是否绘制 YOLO 检测框。
+    bool print_detections = false;  // 是否逐帧打印检测结果。
+};
+
+/**
  * @brief 应用总配置。
  *
  * AppConfig 是所有子配置的汇总。main.cpp 会把不同子配置分发给对应模块。
@@ -146,6 +158,7 @@ struct AppConfig {
     RoiConfig roi;                  // ROI 配置。
     SerialConfig serial;            // 串口配置。
     DebugConfig debug;              // 调试配置。
+    PreviewConfig preview;          // 预览 demo 配置。
     std::string base_dir;           // app.yaml 所在目录，解析相对路径时使用。
 
     /**
