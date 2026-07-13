@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -14,4 +14,4 @@ cd "${ROOT_DIR}"
 echo "[RUN] bean_vision_framework ${CONFIG_PATH}"
 echo "[LOG] ${LOG_FILE}"
 
-"${ROOT_DIR}/build/bean_vision_framework" "${CONFIG_PATH}" 2>&1 | tee "${LOG_FILE}"
+sudo stdbuf -oL -eL "${ROOT_DIR}/build/bean_vision_framework" "${CONFIG_PATH}" 2>&1 | tee "${LOG_FILE}"
