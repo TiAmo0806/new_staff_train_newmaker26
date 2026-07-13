@@ -13,7 +13,7 @@ camera:
   fps: 30
   exposure:
     auto: false
-    time: 8000
+    time: 14000
   gain:
     auto: false
     value: 4
@@ -29,8 +29,8 @@ command:
 
 scan:
   frames_per_scan: 5
-  min_vote_count: 3
-  min_avg_confidence: 0.6
+  min_vote_count: 1
+  min_avg_confidence: 0.5
   max_retry: 3
   stable_delay_ms: 100
 
@@ -42,7 +42,7 @@ detector:
   class_file: "config/classes.yaml"
 
 roi:
-  file: "config/roi.yaml"
+  file: "config/roi_single_view_4.yaml"
 
 serial:
   mock: true
