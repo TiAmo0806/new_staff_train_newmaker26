@@ -4,6 +4,37 @@
 #include "communication/CRC16.h"
 
 #include <algorithm>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+
+namespace {
+
+bool isKnownCommand(uint8_t cmd) {
+    switch (static_cast<ProtocolCommand>(cmd)) {
+    case ProtocolCommand::Vision:
+    case ProtocolCommand::FinalTask:
+    case ProtocolCommand::Error:
+    case ProtocolCommand::BeanBind:
+    case ProtocolCommand::Pong:
+    case ProtocolCommand::ArriveBean:
+    case ProtocolCommand::ArriveDigit:
+    case ProtocolCommand::Reset:
+    case ProtocolCommand::Ping:
+    case ProtocolCommand::Ack:
+        return true;
+    }
+    return false;
+}
+
+std::string hexByte(uint8_t value) {
+    std::ostringstream oss;
+    oss << "0x" << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+        << static_cast<int>(value);
+    return oss.str();
+}
+
+}  // namespace
 
 const char* Protocol::commandName(uint8_t cmd) {
     switch (static_cast<ProtocolCommand>(cmd)) {
@@ -190,6 +221,7 @@ ParsedPacket Protocol::parsePacket(const std::vector<uint8_t>& packet) const {
     const size_t expected_size = 4U + parsed.length + 2U;
     if (packet.size() != expected_size) {
         parsed.reason = "bad_length";
+        std::cout << "[WARN] drop frame: invalid length\n";
         return parsed;
     }
 
@@ -200,12 +232,16 @@ ParsedPacket Protocol::parsePacket(const std::vector<uint8_t>& packet) const {
     const uint16_t calculated_crc = CRC16::calculate(crc_input);
     if (received_crc != calculated_crc) {
         parsed.reason = "bad_crc";
+        std::cout << "[WARN] drop frame: crc mismatch\n";
         return parsed;
     }
 
     parsed.payload.assign(packet.begin() + 4, packet.end() - 2);
     parsed.valid = true;
     parsed.reason = "ok";
+    if (!isKnownCommand(parsed.cmd)) {
+        std::cout << "[WARN] unknown command: " << hexByte(parsed.cmd) << "\n";
+    }
     return parsed;
 }
 

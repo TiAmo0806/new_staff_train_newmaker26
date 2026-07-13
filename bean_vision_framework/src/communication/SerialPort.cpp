@@ -38,6 +38,10 @@ Protocol& protocolInstance() {
     return protocol;
 }
 
+int openConfiguredPort(const std::string& port) {
+    return ::open(port.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
+}
+
 }  // namespace
 
 /**
@@ -57,11 +61,44 @@ bool SerialPort::open() {
         return true;
     }
 
-    fd_ = ::open(config_.port.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
-    if (fd_ < 0) {
-        std::cerr << "Failed to open serial port " << config_.port
-                  << ": " << std::strerror(errno) << "\n";
-        return false;
+    std::string opened_port = config_.port;
+    if (config_.port == "auto") {
+        const std::vector<std::string> candidates = {
+            "/dev/ttyACM0",
+            "/dev/ttyACM1",
+            "/dev/ttyACM2",
+            "/dev/ttyACM3",
+            "/dev/ttyUSB0",
+            "/dev/ttyUSB1",
+            "/dev/ttyUSB2",
+            "/dev/ttyUSB3",
+        };
+
+        for (const auto& candidate : candidates) {
+            fd_ = openConfiguredPort(candidate);
+            if (fd_ >= 0) {
+                opened_port = candidate;
+                std::cout << "[SERIAL] auto selected port=" << opened_port << "\n";
+                break;
+            }
+        }
+
+        if (fd_ < 0) {
+            std::cerr << "[ERROR] no available serial port found in auto mode\n";
+            std::cerr << "[SERIAL] tried:";
+            for (const auto& candidate : candidates) {
+                std::cerr << " " << candidate;
+            }
+            std::cerr << "\n";
+            return false;
+        }
+    } else {
+        fd_ = openConfiguredPort(config_.port);
+        if (fd_ < 0) {
+            std::cerr << "Failed to open serial port " << config_.port
+                      << ": " << std::strerror(errno) << "\n";
+            return false;
+        }
     }
 
     termios tty {};
@@ -93,7 +130,7 @@ bool SerialPort::open() {
         return false;
     }
 
-    std::cout << "Serial opened: " << config_.port << " baudrate=" << config_.baudrate << "\n";
+    std::cout << "Serial opened: " << opened_port << " baudrate=" << config_.baudrate << "\n";
     return true;
 }
 
@@ -117,11 +154,13 @@ bool SerialPort::write(const std::vector<uint8_t>& data) {
         return true;
     }
 
-    const int attempts = std::max(1, config_.max_resend + 1);
+    const int retries = std::max(0, config_.max_resend);
+    const int attempts = retries + 1;
     for (int attempt = 1; attempt <= attempts; ++attempt) {
         const ssize_t written = ::write(fd_, data.data(), data.size());
         if (written < 0 || static_cast<size_t>(written) != data.size()) {
-            std::cerr << "Serial write failed: " << std::strerror(errno) << "\n";
+            std::cerr << "[ERROR] serial write failed: " << std::strerror(errno) << "\n";
+            std::cerr << "[WARN] serial device may be disconnected, check /dev/ttyACM* or use port: auto\n";
             return false;
         }
 
@@ -141,10 +180,15 @@ bool SerialPort::write(const std::vector<uint8_t>& data) {
         if (waitForAck(data[1], data[3])) {
             return true;
         }
-        std::cout << "[WARN] ACK timeout for cmd=" << Protocol::commandName(data[1])
-                  << " seq=" << static_cast<int>(data[3])
-                  << " retry=" << attempt << "/" << attempts << "\n";
+        if (attempt <= retries) {
+            std::cout << "[WARN] ACK timeout cmd=" << Protocol::commandName(data[1])
+                      << " seq=" << static_cast<int>(data[3])
+                      << " retry=" << attempt << "/" << retries << "\n";
+        }
     }
+    std::cerr << "[ERROR] ACK failed cmd=" << Protocol::commandName(data[1])
+              << " seq=" << static_cast<int>(data[3])
+              << " after " << retries << " retries\n";
     return false;
 }
 
@@ -165,7 +209,8 @@ bool SerialPort::readAvailable(std::vector<uint8_t>& data) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return true;
         }
-        std::cerr << "Serial read failed: " << std::strerror(errno) << "\n";
+        std::cerr << "[ERROR] serial read failed: " << std::strerror(errno) << "\n";
+        std::cerr << "[WARN] serial device may be disconnected, check /dev/ttyACM* or use port: auto\n";
         return false;
     }
     if (count > 0) {
