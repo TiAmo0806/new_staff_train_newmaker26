@@ -4,6 +4,7 @@
 #include "Communication/VisionProtocol.h"
 #include "ImgProcessing/FieldStateCollector.h"
 #include <cstdint>
+#include <string>
 #include <vector>
 
 struct CompetitionWorkflowConfig
@@ -19,6 +20,13 @@ struct CompetitionWorkflowConfig
     // 默认0.40表示只接受画面横向30%~70%范围内的豆子；A组完全不使用此参数。
     float teamBCenterWidthRatio = 0.40f;
 
+    // true时，每次串口成功发送后把稳定结果和当前阶段保存到progressFile。
+    // 下次重新启动会恢复断点，适合比赛中关闭相机程序后继续下一识别阶段。
+    bool resumeProgress = true;
+
+    // 进度文件路径由Utils按zst项目根目录解析成绝对路径。
+    // 文件只保存已成功发送的阶段，不保存尚未完成的临时投票帧。
+    std::string progressFile = "runtime/workflow_progress.txt";
 };
 
 class CompetitionWorkflow
@@ -41,8 +49,13 @@ public:
     // 如果目标 mode 与当前一致，则什么也不做，避免误按按键导致识别进度被清空。
     void switchMode(TeamMode mode);
 
-    // 在当前队伍模式下重新开始：清空豆子/数字、投票桶和完成状态。
+    // 在当前队伍模式下重新开始：清空豆子/数字、投票桶、阶段和磁盘进度。
+    // 调试窗口按R时调用；新一场比赛开始前必须执行一次，避免沿用上一场结果。
     void reset();
+
+    // main只有在VirtualSerial::sendPacket()返回成功后才调用本函数。
+    // 它把当前阶段和稳定结果写入磁盘，使“成功发送后退出程序”可以断点续跑。
+    void confirmPacketSent(const VisionTxPacket &packet);
 
     TeamMode mode() const;                  // 获取当前队伍模式
     bool finished() const;                  // 当前队伍流程是否已完成
@@ -68,6 +81,14 @@ private:
 
     // 根据队伍模式创建投票收集器。TeamB 会限制每次提交最多保存一个新豆子。
     FieldStateCollector makeCollector() const;
+
+    // 只清内存，不删除磁盘文件；构造时先初始化内存，再尝试从进度文件恢复。
+    void resetMemory();
+
+    // 断点文件只保存已成功发送的稳定状态。加载失败/模式不匹配时返回false并从头开始。
+    bool loadProgress();
+    bool saveProgress() const;
+    void clearProgressFile() const;
 
     // 将业务DATA与CMD组合为最简payload：[CMD][DATA...]。
     VisionTxPacket makePacket(VisionMessageType type, const std::vector<uint8_t> &data);

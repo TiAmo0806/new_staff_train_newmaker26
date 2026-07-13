@@ -3,34 +3,34 @@
 
 #include "CameraDriver/MindVisionCamera.h"
 #include "Communication/VirtualSerial.h"
-#include "ImgProcessing/VisionSystem.h"
 #include "ImgProcessing/CompetitionWorkflow.h"
+#include "ImgProcessing/VisionSystem.h"
 #include <filesystem>
 #include <string>
 
+// 应用总配置：把YAML各段解析为对应模块能够直接使用的强类型配置。
 struct AppConfig
 {
-    CameraConfig camera;                    // 工业相机参数：曝光、增益等
-    VisionSystemConfig vision;              // YOLO/SVM/规划器参数
-    SerialConfig serial;                    // 串口参数：端口名、波特率、模拟模式
-    CompetitionWorkflowConfig workflow;     // 比赛流程参数：队伍模式、投票帧数
-    bool showWindow = true;                 // 是否显示 OpenCV 调试窗口
-    bool saveVideo = false;                 // 是否保存调试视频
-    std::string logDir = "logs";            // 日志输出目录
-    int terminalLineLimit = 80;             // 终端输出行数限制
+    CameraConfig camera;                    // 工业相机参数：曝光、增益、超时和重连
+    VisionSystemConfig vision;              // YOLO、SVM和调试规划器参数
+    SerialConfig serial;                    // 串口设备、波特率、模拟模式和TX日志
+    CompetitionWorkflowConfig workflow;     // A/B流程、投票和断点续跑参数
+    bool showWindow = true;                 // 是否显示OpenCV调试窗口
+    bool saveVideo = false;                 // 预留：当前主循环尚未实现录像
+    std::string logDir = "logs";            // 预留：当前主循环尚未写日志文件
+    int terminalLineLimit = 80;             // 预留：当前主循环尚未限制终端行数
 };
 
-// 生成运行时间戳，格式：YYMMDDHHMM，用于日志文件名
+// 生成运行时间戳，格式YYMMDDHHMM；保留给后续日志/录像文件命名。
 std::string makeRunTimestamp();
-// 根据配置文件路径反推项目根目录（往上两级）
+
+// 根据config/vision.yaml的位置向上两级得到zst项目根目录。
 std::filesystem::path resolveProjectRoot(const std::string &configPath);
 
-// 查找程序默认配置文件，不依赖启动时的当前工作目录（CWD）。
-// Linux 优先根据 /proc/self/exe 找到可执行文件所在目录，
-// 再定位 ../config/vision.yaml。
-// 如果该方法不可用，则依次尝试 argv[0] 和当前工作目录。
+// 默认配置查找不依赖当前工作目录：Linux优先使用/proc/self/exe定位可执行文件。
 std::filesystem::path findDefaultConfigPath(const char *argv0);
 
+// 读取YAML、限制危险参数范围，并把模型和断点相对路径转换为项目绝对路径。
 bool loadAppConfig(const std::string &path, AppConfig &config);
 
 #endif // UTILS_H

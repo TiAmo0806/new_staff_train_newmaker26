@@ -50,6 +50,45 @@ void FieldStateCollector::reset()
     resetBoxAngle();
 }
 
+void FieldStateCollector::restoreState(const FieldState &savedState)
+{
+    // 先回到完全干净的状态，避免恢复数据与构造阶段的默认值混在一起。
+    reset();
+
+    // beanPlaces按保存顺序恢复。只接受1~3范围内且尚未出现过的有效豆子，
+    // 即使进度文件被手工改坏，也不会把未知值或重复豆子写入正式状态。
+    for (BeanType bean : savedState.beanPlaces)
+    {
+        const int code = static_cast<int>(encodeBeanType(bean));
+        if (code < 1 || code > 3 || seenBeans_[code]) continue;
+        if (nextBeanIndex_ >= static_cast<int>(state_.beanPlaces.size())) break;
+
+        state_.beanPlaces[nextBeanIndex_] = bean;
+        seenBeans_[code] = true;
+        ++nextBeanIndex_;
+    }
+
+    // boxPlaces同样只恢复1~5范围内且不重复的数字。
+    // 当前业务约定每个数字只出现一次，因此重复值应视为损坏数据并跳过。
+    for (int digit : savedState.boxPlaces)
+    {
+        if (digit < 1 || digit > 5 || seenDigits_[digit]) continue;
+        if (nextBoxIndex_ >= static_cast<int>(state_.boxPlaces.size())) break;
+
+        state_.boxPlaces[nextBoxIndex_] = digit;
+        seenDigits_[digit] = true;
+        ++nextBoxIndex_;
+    }
+
+    // ready不直接相信文件中的布尔值，而是根据实际恢复出的有效元素重新计算。
+    state_.beanReady = nextBeanIndex_ >= static_cast<int>(state_.beanPlaces.size());
+    state_.boxReady = nextBoxIndex_ >= static_cast<int>(state_.boxPlaces.size());
+
+    // 上次中途累计但没有形成稳定结果的投票不落盘，恢复后从新画面重新投票。
+    resetBeanAngle();
+    resetBoxAngle();
+}
+
 void FieldStateCollector::resetBeanAngle()
 {
     // 只清空当前豆子角度的临时投票，不影响已经保存到 state_ 的结果。

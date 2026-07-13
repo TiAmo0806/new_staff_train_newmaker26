@@ -16,7 +16,6 @@
 #include <chrono>
 #include <iostream>
 #include <opencv2/highgui.hpp>
-#include <opencv2/imgproc.hpp>
 #include <string>
 #include <thread>
 
@@ -69,7 +68,8 @@ int main(int argc, char **argv)
     }
 
     // 两队共用识别算法、协议编码和物理串口，只切换上层流程状态机。
-    // TeamA：全部数字 -> 通知 -> 全部豆子 -> 通知 -> 完整结果。
+    // TeamA：全部数字 -> 发送数字数组 -> 全部豆子 -> 发送豆子数组。
+    // 每次成功发送后保存断点，程序重启后会从下一阶段继续，不会重新等待数字。
     // TeamB：中心第1个豆子 -> 全部数字place1~5 -> 中心剩余新豆子；类型顺序不固定。
     CompetitionWorkflow workflow(config.workflow);      // 创建比赛工作流
     std::cout << "[Main] 当前队伍: " << teamModeToString(config.workflow.mode)
@@ -85,14 +85,7 @@ int main(int argc, char **argv)
     const std::string windowName = "Logistics Vision";
     if (config.showWindow) cv::namedWindow(windowName, cv::WINDOW_NORMAL); // 创建可缩放窗口
 
-    using Clock = std::chrono::steady_clock;
-    auto statsWindowStart = Clock::now();
-    auto previousFrameEnd = statsWindowStart;
-    int statsFrameCount = 0;
     int consecutiveCaptureFailures = 0;
-    double captureMsSum = 0.0;
-    double visionMsSum = 0.0;
-    double displayedFps = 0.0;                         // 指数平滑后的实时FPS
     cv::Mat lastDebugImage;                            // 相机短暂掉线时保持窗口可响应
 
     while (true)
@@ -100,7 +93,6 @@ int main(int argc, char **argv)
         // 4. 取图。
         // frame 是一帧 BGR 图像，后面会直接送进 YOLO。
         // 如果连续取图失败，自动重开相机；失败期间仍调用waitKey，避免窗口假死。
-        const auto captureStart = Clock::now();
         cv::Mat frame;
         if (!camera.read(frame) || frame.empty())
         {
@@ -130,13 +122,6 @@ int main(int argc, char **argv)
                 {
                     std::cout << "[CameraWatchdog] 相机重连成功" << std::endl;
                     consecutiveCaptureFailures = 0;
-                    const auto recoveredAt = Clock::now();
-                    previousFrameEnd = recoveredAt;      // 排除重连时间对FPS平滑值的影响
-                    statsWindowStart = recoveredAt;
-                    statsFrameCount = 0;
-                    captureMsSum = 0.0;
-                    visionMsSum = 0.0;
-                    displayedFps = 0.0;
                 }
                 else
                 {
@@ -147,20 +132,13 @@ int main(int argc, char **argv)
             }
             continue;
         }
-        const auto captureEnd = Clock::now();
-        const double captureMs =
-            std::chrono::duration<double, std::milli>(captureEnd - captureStart).count();
         consecutiveCaptureFailures = 0;
 
         // 5. YOLO 检测 + SVM 复核 + 任务规划。
         // result.detections：当前帧所有豆子/数字箱检测框；
         // result.decision：根据比赛规则算出的目标数字箱；
         // result.debugImage：画好框和文字的调试图。
-        const auto visionStart = Clock::now();
         VisionFrameResult result = vision.process(frame); // 完整一帧视觉处理
-        const auto visionEnd = Clock::now();
-        const double visionMs =
-            std::chrono::duration<double, std::milli>(visionEnd - visionStart).count();
 
         // 6. 当前队伍工作流决定"这一帧是否产生阶段消息"。
         // update只处理识别顺序和生成消息，不直接操作串口，因此TeamA/B流程可以独立测试。
@@ -171,49 +149,18 @@ int main(int argc, char **argv)
             workflow.update(result.detections, frame.cols); // 工作流更新
         for (const VisionTxPacket &tx : packets)
         {
-            // TeamA豆子阶段完成时packets包含两帧：BeansComplete和FinalResult，
-            // 这里按vector顺序逐帧发送，完整字节不会相互交叉。
+            // 工作流可能在某一帧生成一条或多条消息；按vector顺序逐条发送，
+            // 每条消息都会独立添加帧头和CRC，线路字节不会相互交叉。
             if (!serial.sendPacket(tx))                 // 封帧 + CRC + 写入串口
                 std::cerr << "[Main] 工作流消息发送失败" << std::endl;
+            else
+                // 只有Linux串口层确认完整帧写入成功后才落盘断点。
+                // 这样退出程序再启动时，会从“已经成功发送”的下一阶段继续。
+                workflow.confirmPacketSent(tx);
         }
 
-        // 以完整处理帧的间隔计算实时FPS，再用指数平滑减少数字跳动。
-        const auto frameEnd = Clock::now();
-        const double frameInterval =
-            std::chrono::duration<double>(frameEnd - previousFrameEnd).count();
-        previousFrameEnd = frameEnd;
-        if (frameInterval > 0.0 && frameInterval < 2.0)
-        {
-            const double instantaneousFps = 1.0 / frameInterval;
-            displayedFps = displayedFps <= 0.0
-                ? instantaneousFps
-                : displayedFps * 0.90 + instantaneousFps * 0.10;
-        }
-
-        statsFrameCount++;
-        captureMsSum += captureMs;
-        visionMsSum += visionMs;
-        const double statsSeconds =
-            std::chrono::duration<double>(frameEnd - statsWindowStart).count();
-        if (statsSeconds >= 1.0)
-        {
-            const double windowFps = statsFrameCount / statsSeconds;
-            std::cout << "[Performance] FPS=" << windowFps
-                      << "，capture=" << (captureMsSum / statsFrameCount) << "ms"
-                      << "，vision=" << (visionMsSum / statsFrameCount) << "ms"
-                      << std::endl;
-            statsWindowStart = frameEnd;
-            statsFrameCount = 0;
-            captureMsSum = 0.0;
-            visionMsSum = 0.0;
-        }
-
-        // 在画面左上角第二行显示端到端FPS、取帧耗时和视觉推理耗时。
-        const std::string performanceText = cv::format(
-            "FPS %.1f | CAP %.1f ms | VISION %.1f ms",
-            displayedFps, captureMs, visionMs);
-        cv::putText(result.debugImage, performanceText, cv::Point(20, 75),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.65, cv::Scalar(255, 255, 0), 2);
+        // 保存最近一张识别结果图。相机短暂掉线时继续显示该图并处理退出按键。
+        // 此处不再叠加FPS、取帧耗时或推理延迟，避免比赛日志和画面被性能信息干扰。
         lastDebugImage = result.debugImage;
 
         // 7. 调试窗口显示。
@@ -227,6 +174,9 @@ int main(int argc, char **argv)
             // 调试时按 1/2 可切换队伍。切换会清空旧识别缓存并开始新会话。
             if (key == '1') workflow.switchMode(TeamMode::TeamA); // 切换到队伍A
             if (key == '2') workflow.switchMode(TeamMode::TeamB); // 切换到队伍B
+            // 新一场比赛开始前按R：同时清空内存投票和磁盘断点。
+            // 正常中途关相机/退出程序不要按R，否则将故意从第一阶段重新开始。
+            if (key == 'r' || key == 'R') workflow.reset();
         }
     }
 
