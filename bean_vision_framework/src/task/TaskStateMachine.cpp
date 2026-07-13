@@ -255,7 +255,11 @@ void TaskStateMachine::process(const VisionResult& current,
 
         case TaskState::SEND_FINAL_TASK:
             packet_ = protocol.makeTaskPacket(taskResult_);
-            serial.write(packet_);
+            if (!serial.write(packet_)) {
+                std::cout << "[ERROR] failed to send FINAL_TASK\n";
+                setState(TaskState::WAIT_DIGIT_COMMAND);
+                break;
+            }
             memory_.clear();
             setState(TaskState::DONE);
             break;
@@ -306,7 +310,7 @@ bool TaskStateMachine::processCommand(const std::string& line,
             std::cout << "[WARN] expected arrive_bean <image_path>\n";
             return true;
         }
-        return handleArriveDigit(image_path, taskGenerator, config, force_print);
+        return handleArriveDigit(image_path, taskGenerator, protocol, serial, config, force_print);
     }
 
     std::cout << "[WARN] unknown command: " << command << "\n";
@@ -406,6 +410,8 @@ bool TaskStateMachine::handleArriveBean(const std::string& image_path,
  */
 bool TaskStateMachine::handleArriveDigit(const std::string& image_path,
                                          TaskGenerator& taskGenerator,
+                                         Protocol& protocol,
+                                         SerialPort& serial,
                                          const AppConfig& config,
                                          bool force_print) {
     if (image_path.empty()) {
@@ -447,7 +453,28 @@ bool TaskStateMachine::handleArriveDigit(const std::string& image_path,
     const TaskResult preview_task = taskGenerator.generate(preview_vision);
     printTaskPreview(preview_task);
 
-    setState(TaskState::WAIT_DIGIT_COMMAND);
+    if (!preview_task.success) {
+        std::cout << "[WARN] final task generation failed: " << preview_task.reason << "\n";
+        setState(TaskState::WAIT_DIGIT_COMMAND);
+        return true;
+    }
+
+    taskResult_ = preview_task;
+    setState(TaskState::SEND_FINAL_TASK);
+    packet_ = protocol.makeTaskPacket(taskResult_);
+    if (!serial.write(packet_)) {
+        std::cout << "[ERROR] failed to send FINAL_TASK\n";
+        setState(TaskState::WAIT_DIGIT_COMMAND);
+        return true;
+    }
+
+    for (const auto& task : taskResult_.tasks) {
+        std::cout << "[TX FINAL_TASK] P" << static_cast<int>(task.from)
+                  << " -> L" << static_cast<int>(task.to)
+                  << " bean=" << static_cast<int>(task.bean) << "\n";
+    }
+
+    setState(TaskState::DONE);
     return true;
 }
 
@@ -509,10 +536,14 @@ bool TaskStateMachine::acceptDigitResult(const VisionResult& result,
 
     setState(TaskState::SEND_FINAL_TASK);
     packet_ = protocol.makeTaskPacket(taskResult_);
-    serial.write(packet_);
+    if (!serial.write(packet_)) {
+        std::cout << "[ERROR] failed to send FINAL_TASK\n";
+        setState(TaskState::WAIT_DIGIT_COMMAND);
+        return true;
+    }
     for (const auto& task : taskResult_.tasks) {
-        std::cout << "[TX MOCK] FINAL_TASK from=P" << static_cast<int>(task.from)
-                  << " to=L" << static_cast<int>(task.to)
+        std::cout << "[TX FINAL_TASK] P" << static_cast<int>(task.from)
+                  << " -> L" << static_cast<int>(task.to)
                   << " bean=" << static_cast<int>(task.bean) << "\n";
     }
 

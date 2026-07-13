@@ -149,6 +149,8 @@ private:
      */
     bool handleArriveDigit(const std::string& image_path,
                            TaskGenerator& taskGenerator,
+                           Protocol& protocol,
+                           SerialPort& serial,
                            const AppConfig& config,
                            bool force_print);
 
