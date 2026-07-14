@@ -13,10 +13,10 @@ camera:
   fps: 30
   exposure:
     auto: false
-    time: 14000
+    time: 20000
   gain:
     auto: false
-    value: 1.0
+    value: 3.0
   white_balance:
     auto: false
   image:
@@ -29,13 +29,13 @@ roi:
 
 detector:
   backend: "onnxruntime"
-  model_path: "../bisai/bean_digit_v1_verified_20260624/best.onnx"
+  model_path: "../bisai/bean_digit_v1_verified_20260624/best4.onnx"
   conf_threshold: 0.25
   nms_threshold: 0.45
   class_file: "config/classes.yaml"
 
 preview:
-  draw_roi: true
+  draw_roi: false
   yolo_enable: true
   draw_boxes: true
   print_detections: true

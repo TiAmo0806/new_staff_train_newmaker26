@@ -126,6 +126,9 @@ int main(int argc, char** argv) {
 
         cv::Mat visual = frame.clone();
         std::vector<Detection> detections;
+        if (config.preview.draw_roi) {
+            DrawUtils::drawRois(visual, config.roi);
+        }
         if (detector != nullptr) {
             detections = detector->detect(frame);
             if (config.preview.print_detections) {
@@ -134,10 +137,6 @@ int main(int argc, char** argv) {
             if (config.preview.draw_boxes) {
                 DrawUtils::drawDetections(visual, detections);
             }
-        }
-
-        if (config.preview.draw_roi) {
-            DrawUtils::drawRois(visual, config.roi);
         }
         drawMouseOverlay(visual);
 
