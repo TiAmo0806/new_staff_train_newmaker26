@@ -29,4 +29,5 @@ conda_env/
 onnxruntime-sdk/
 MVSDK/
 Camera/
+model/
 
