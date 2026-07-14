@@ -120,6 +120,7 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
             if (s["baudrate"]) config.serial.baudrate = s["baudrate"].as<int>();
             if (s["simulated"]) config.serial.simulated = s["simulated"].as<bool>();
             if (s["tx_log"]) config.serial.txLog = s["tx_log"].as<bool>();
+            if (s["rx_log"]) config.serial.rxLog = s["rx_log"].as<bool>();
         }
 
         if (y["runtime"])

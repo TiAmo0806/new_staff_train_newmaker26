@@ -47,11 +47,16 @@ int main(int argc, char **argv)
     //   3) 打开指定 index 的相机；
     //   4) 设置 BGR8 输出，方便 OpenCV 使用。
     MindVisionCamera camera(config.camera);             // 用配置创建相机对象
-    if (!camera.open())
-    {
-        std::cerr << "[Main] 相机打开失败" << std::endl;
-        return 1;
-    }
+    // 相机第一次打开失败时不再退出整个程序，因为串口必须继续运行，才能等待电控
+    // 后续发送camera_state=1。cameraIsOpen只表示SDK当前是否真正持有相机。
+    bool cameraIsOpen = camera.open();
+    if (!cameraIsOpen)
+        std::cerr << "[Main] 相机首次打开失败，程序保留运行并等待重连/电控开启命令"
+                  << std::endl;
+
+    // 默认保持原来的“程序启动即开相机”行为，兼容电控尚未发送控制帧的调试场景。
+    // 收到camera_state=0后变为false，此时停止取图和推理，但串口主循环继续运行。
+    bool cameraEnabled = true;
 
     // 3. 初始化视觉系统和串口。
     // VisionSystem 内部包含：
@@ -80,17 +85,91 @@ int main(int argc, char **argv)
     std::cout << "[Main] 串口模式: " << (config.serial.simulated ? "模拟发送" : "真实串口")
               << "，端口=" << config.serial.port
               << "，波特率=" << config.serial.baudrate
-              << "，十六进制日志=" << (config.serial.txLog ? "开启" : "关闭") << std::endl;
+              << "，TX日志=" << (config.serial.txLog ? "开启" : "关闭")
+              << "，RX日志=" << (config.serial.rxLog ? "开启" : "关闭") << std::endl;
 
     const std::string windowName = "Logistics Vision";
     if (config.showWindow) cv::namedWindow(windowName, cv::WINDOW_NORMAL); // 创建可缩放窗口
+
+    // 三个位置都会处理按键：正常取图、相机取图失败、以及电控主动关闭相机时。
+    // 返回true表示用户要求退出；R/1/2仍交给工作流处理，不依赖相机是否开启。
+    auto handleKey = [&](int key) {
+        if (key == 27 || key == 'q' || key == 'Q') return true; // ESC或Q退出程序
+        if (key == '1') workflow.switchMode(TeamMode::TeamA);   // 切换到队伍A
+        if (key == '2') workflow.switchMode(TeamMode::TeamB);   // 切换到队伍B
+        // 新一场比赛开始前按R：同时清空内存投票和磁盘断点。
+        // 正常中途关相机不要按R，否则会主动删除断点并回到第一阶段。
+        if (key == 'r' || key == 'R') workflow.reset();
+        return false;
+    };
 
     int consecutiveCaptureFailures = 0;
     cv::Mat lastDebugImage;                            // 相机短暂掉线时保持窗口可响应
 
     while (true)
     {
-        // 4. 取图。
+        // 4. 先处理电控->视觉的相机控制帧，再决定本轮是否取图。
+        // receiveCameraState()为非阻塞函数；当前没有完整帧时会立即返回false，
+        // 不会因为等待串口而拖慢相机帧率。while用于一次处理串口中积压的多条命令，
+        // 最后一条合法命令决定最终状态，例如连续收到0、1后保持开启。
+        uint8_t requestedCameraState = 0;
+        while (serial.receiveCameraState(requestedCameraState))
+        {
+            const bool requestedEnabled = requestedCameraState == 1;
+            if (requestedEnabled == cameraEnabled) continue; // 重复命令无需反复开关SDK
+
+            cameraEnabled = requestedEnabled;
+            if (!cameraEnabled)
+            {
+                // 只关闭相机SDK，不退出程序、不关闭串口，也不清空A/B识别和断点数据。
+                // 因此A组发完数字后收到0，之后再收到1仍会直接进入豆子阶段。
+                if (cameraIsOpen) camera.close();
+                cameraIsOpen = false;
+                consecutiveCaptureFailures = 0;
+                std::cout << "[CameraControl] 收到camera_state=0，相机已关闭，串口继续监听"
+                          << std::endl;
+            }
+            else
+            {
+                // 不在接收函数里直接open，避免串口协议层依赖相机SDK；
+                // 本轮下面的统一重连分支会执行camera.open()。
+                std::cout << "[CameraControl] 收到camera_state=1，准备打开相机" << std::endl;
+            }
+        }
+
+        // 电控要求关闭相机时，不能调用camera.read()，否则SDK会持续报取帧失败并触发看门狗。
+        // 这里仍刷新窗口、处理键盘并短暂休眠，保证程序可退出且不会空循环占满CPU。
+        if (!cameraEnabled)
+        {
+            if (config.showWindow)
+            {
+                if (!lastDebugImage.empty()) cv::imshow(windowName, lastDebugImage);
+                if (handleKey(cv::waitKey(1))) break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+
+        // camera_state=1但相机尚未打开，或之前USB掉线导致句柄关闭时，在这里统一重试。
+        if (!cameraIsOpen)
+        {
+            std::cout << "[CameraControl] 正在打开相机" << std::endl;
+            cameraIsOpen = camera.open();
+            if (cameraIsOpen)
+            {
+                consecutiveCaptureFailures = 0;
+                std::cout << "[CameraControl] 相机打开成功" << std::endl;
+            }
+            else
+            {
+                std::cerr << "[CameraControl] 相机打开失败，1秒后继续尝试" << std::endl;
+                if (config.showWindow && handleKey(cv::waitKey(1))) break;
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                continue;
+            }
+        }
+
+        // 5. 取图。
         // frame 是一帧 BGR 图像，后面会直接送进 YOLO。
         // 如果连续取图失败，自动重开相机；失败期间仍调用waitKey，避免窗口假死。
         cv::Mat frame;
@@ -109,16 +188,17 @@ int main(int argc, char **argv)
             if (config.showWindow)
             {
                 if (!lastDebugImage.empty()) cv::imshow(windowName, lastDebugImage);
-                const int key = cv::waitKey(1);
-                if (key == 27 || key == 'q' || key == 'Q') break;
+                if (handleKey(cv::waitKey(1))) break;
             }
 
             if (consecutiveCaptureFailures >= config.camera.reconnectAfterFailures)
             {
                 std::cerr << "[CameraWatchdog] 尝试重新打开相机" << std::endl;
                 camera.close();
+                cameraIsOpen = false;
                 std::this_thread::sleep_for(std::chrono::milliseconds(300));
-                if (camera.open())
+                cameraIsOpen = camera.open();
+                if (cameraIsOpen)
                 {
                     std::cout << "[CameraWatchdog] 相机重连成功" << std::endl;
                     consecutiveCaptureFailures = 0;
@@ -134,16 +214,16 @@ int main(int argc, char **argv)
         }
         consecutiveCaptureFailures = 0;
 
-        // 5. YOLO 检测 + SVM 复核 + 任务规划。
+        // 6. YOLO 检测 + SVM 复核 + 任务规划。
         // result.detections：当前帧所有豆子/数字箱检测框；
         // result.decision：根据比赛规则算出的目标数字箱；
         // result.debugImage：画好框和文字的调试图。
         VisionFrameResult result = vision.process(frame); // 完整一帧视觉处理
 
-        // 6. 当前队伍工作流决定"这一帧是否产生阶段消息"。
+        // 7. 当前队伍工作流决定"这一帧是否产生阶段消息"。
         // update只处理识别顺序和生成消息，不直接操作串口，因此TeamA/B流程可以独立测试。
-        // 单向模式不等待电控 ACK；sendPacket内部只保证尝试把字节写入Linux串口，
-        // 写成功并不能证明C板已经收到或完成运动。
+        // 当前已实现双向串口，但视觉结果发送仍不等待电控ACK；电控->视觉方向目前
+        // 只接收camera_state。sendPacket写成功仍不能证明C板已经处理了视觉结果。
         // imageWidth用于B组选择最靠近画面中心的豆子；A组仍按原来的从左到右规则。
         const std::vector<VisionTxPacket> packets =
             workflow.update(result.detections, frame.cols); // 工作流更新
@@ -163,20 +243,13 @@ int main(int argc, char **argv)
         // 此处不再叠加FPS、取帧耗时或推理延迟，避免比赛日志和画面被性能信息干扰。
         lastDebugImage = result.debugImage;
 
-        // 7. 调试窗口显示。
+        // 8. 调试窗口显示。
         // 按 ESC / q 退出程序。
         // 实车跑无屏幕模式时，可以在配置里关闭 show_window。
         if (config.showWindow)
         {
             cv::imshow(windowName, result.debugImage);  // 显示调试图
-            int key = cv::waitKey(1);                   // 等待 1ms，获取按键
-            if (key == 27 || key == 'q' || key == 'Q') break; // ESC 或 q 退出
-            // 调试时按 1/2 可切换队伍。切换会清空旧识别缓存并开始新会话。
-            if (key == '1') workflow.switchMode(TeamMode::TeamA); // 切换到队伍A
-            if (key == '2') workflow.switchMode(TeamMode::TeamB); // 切换到队伍B
-            // 新一场比赛开始前按R：同时清空内存投票和磁盘断点。
-            // 正常中途关相机/退出程序不要按R，否则将故意从第一阶段重新开始。
-            if (key == 'r' || key == 'R') workflow.reset();
+            if (handleKey(cv::waitKey(1))) break;       // 获取并统一处理按键
         }
     }
 

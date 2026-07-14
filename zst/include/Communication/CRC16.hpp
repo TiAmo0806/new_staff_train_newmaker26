@@ -5,7 +5,7 @@
 
 namespace crc16
 {
-// Modbus CRC16：初值 0xFFFF，多项式 0xA001。
+//裁判系统CRC16：初值0xFFFF，反向多项式0x8408。
 // Calc 计算指定字节范围；Append 写入缓冲区末尾低/高字节；Verify 校验收到的完整帧。
 
 // 计算 data 前 length 字节的 CRC16 校验值

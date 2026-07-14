@@ -21,6 +21,7 @@ serial:
   baudrate: 115200                      # 当前 C++ 实现固定为 115200-8-N-1
   simulated: true                       # true只打印不发送；接上电控实测时改为 false
   tx_log: true                          # 打印 A6...CRC 的完整十六进制发送帧
+  rx_log: true                          # 打印 5A camera_state CRC 的电控接收帧
 
 # 两个队伍使用不同 C 板、不同时间上场，但共用视觉程序和物理串口。
 # team_a：全部数字数组 -> 全部豆子数组；不发送对应位置和最终合并帧。

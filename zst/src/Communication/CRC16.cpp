@@ -5,13 +5,14 @@ namespace crc16
 {
 uint16_t Calc(const uint8_t *data, int length)
 {
-    // 逐字节、逐位计算 Modbus CRC16。算法双方必须使用相同初值、多项式和字节序。
-    uint16_t crc = 0xFFFF;                      // CRC 初值
+    // 裁判系统CRC16。
+    // 其查表实现来自反向多项式0x8408；这里使用等价的逐位算法，结果逐字节相同。
+    uint16_t crc = 0xFFFF;                      // 裁判系统CRC16固定初值
     for (int i = 0; i < length; ++i)
     {
         crc ^= data[i];                         // 当前字节异或进 CRC 低字节
         for (int j = 0; j < 8; ++j)             // 逐位处理
-            crc = (crc & 1) ? (crc >> 1) ^ 0xA001 : (crc >> 1);  // 最低位为1时异或多项式
+            crc = (crc & 1) ? (crc >> 1) ^ 0x8408 : (crc >> 1);  // 最低位为1时异或0x8408
     }
     return crc;
 }

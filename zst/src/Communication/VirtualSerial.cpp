@@ -1,5 +1,7 @@
 #include "Communication/VirtualSerial.h"
 #include "Communication/CRC16.hpp"
+#include <algorithm>
+#include <cerrno>
 #include <dirent.h>
 #include <fcntl.h>
 #include <iomanip>
@@ -106,6 +108,109 @@ bool VirtualSerial::sendPacket(const VisionTxPacket &packet, int maxRetries)
     else
         std::cerr << "[Serial] 重试和重连后仍发送失败" << std::endl;
     return sent;
+}
+
+bool VirtualSerial::receiveCameraState(uint8_t &cameraState)
+{
+    // 模拟模式没有真实电控输入，直接返回“当前没有新命令”。
+    // 这样只做算法调试时仍保持相机默认开启，不会因为等电控而停住。
+    if (config_.simulated) return false;
+
+    // 如果串口启动时未连接，或运行中读串口出错被关闭，则按1秒间隔自动重连。
+    // 不能在每帧都重连，否则相机关闭等待期间会持续扫描/dev并输出大量日志。
+    if (fd_ < 0)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (now < nextReceiveReconnectAttempt_) return false;
+        nextReceiveReconnectAttempt_ = now + std::chrono::seconds(1);
+        if (!tryReconnect()) return false;
+    }
+
+    // 串口以O_NONBLOCK打开。一次read可能得到0字节、半帧、一帧或多帧，
+    // 因此先尽量把当前内核缓冲区中的字节读入receiveBuffer_，再统一拆帧。
+    uint8_t chunk[64]{};
+    while (true)
+    {
+        const ssize_t received = read(fd_, chunk, sizeof(chunk));
+        if (received > 0)
+        {
+            receiveBuffer_.insert(receiveBuffer_.end(), chunk, chunk + received);
+            continue;                                      // 继续读取当前已到达的剩余字节
+        }
+        if (received == 0) break;                           // 当前没有更多数据
+        if (errno == EINTR) continue;                       // 被信号打断，重新执行read
+        if (errno == EAGAIN || errno == EWOULDBLOCK) break; // 非阻塞串口暂时无数据
+
+        // EIO、ENODEV等通常表示USB串口掉线。关闭旧fd，下一轮按上面的节流逻辑重连。
+        std::cerr << "[Serial] 接收失败，准备自动重连，errno=" << errno << std::endl;
+        closePort();
+        receiveBuffer_.clear();                             // 丢弃断线前不完整的旧帧
+        return false;
+    }
+
+    // 防止线路噪声长期没有合法帧头时让缓存无限增长。只保留最近256字节，
+    // 后续仍会从其中搜索0x5A并自动恢复帧边界。
+    constexpr size_t MAX_RECEIVE_BUFFER_SIZE = 256;
+    if (receiveBuffer_.size() > MAX_RECEIVE_BUFFER_SIZE)
+    {
+        receiveBuffer_.erase(
+            receiveBuffer_.begin(),
+            receiveBuffer_.end() - static_cast<std::ptrdiff_t>(MAX_RECEIVE_BUFFER_SIZE));
+    }
+
+    while (true)
+    {
+        // 在连续字节流中寻找电控->视觉帧头。帧头前的噪声或上一帧残片直接丢弃。
+        const auto header = std::find(receiveBuffer_.begin(), receiveBuffer_.end(),
+                                      RX_FRAME_HEADER);
+        if (header == receiveBuffer_.end())
+        {
+            receiveBuffer_.clear();                         // 当前缓存完全没有合法帧头
+            return false;
+        }
+        receiveBuffer_.erase(receiveBuffer_.begin(), header);
+
+        // 已找到0x5A但后续状态/CRC尚未全部到达，保留半帧等待下一次调用。
+        if (receiveBuffer_.size() < CAMERA_CONTROL_FRAME_SIZE) return false;
+
+        // CRC覆盖[0x5A][camera_state]，线路按低字节、高字节发送CRC结果。
+        if (!crc16::Verify(receiveBuffer_.data(),
+                           static_cast<int>(CAMERA_CONTROL_FRAME_SIZE)))
+        {
+            std::cerr << "[Serial] RX相机控制帧CRC错误，丢弃当前0x5A并继续找下一帧"
+                      << std::endl;
+            receiveBuffer_.erase(receiveBuffer_.begin());   // 只丢帧头，尽量保留后续有效数据
+            continue;
+        }
+
+        const uint8_t parsedState = receiveBuffer_[1];
+
+        if (config_.rxLog)
+        {
+            std::cout << "[Serial] RX";
+            for (size_t i = 0; i < CAMERA_CONTROL_FRAME_SIZE; ++i)
+                std::cout << " " << std::hex << std::uppercase << std::setw(2)
+                          << std::setfill('0') << static_cast<int>(receiveBuffer_[i]);
+            std::cout << std::dec << "，camera_state="
+                      << static_cast<int>(parsedState) << std::endl;
+        }
+
+        // 当前完整帧已经消费。若一次read收到了多帧，其余字节留给下一次调用解析。
+        receiveBuffer_.erase(receiveBuffer_.begin(),
+                             receiveBuffer_.begin() +
+                                 static_cast<std::ptrdiff_t>(CAMERA_CONTROL_FRAME_SIZE));
+
+        // 业务层目前只定义0/1。CRC虽然正确，但其他状态值也必须拒绝，避免误操作相机。
+        if (parsedState > 1)
+        {
+            std::cerr << "[Serial] 非法camera_state=" << static_cast<int>(parsedState)
+                      << "，只允许0或1，本帧已忽略" << std::endl;
+            continue;
+        }
+
+        cameraState = parsedState;                         // 把合法命令交给main处理
+        return true;
+    }
 }
 
 bool VirtualSerial::configurePort()
