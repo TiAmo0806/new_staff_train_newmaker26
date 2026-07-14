@@ -1,6 +1,9 @@
 # 视觉参数配置文件（YAML格式）
 # 修改后自动生效，无需重新编译
 
+model:
+  model_path: "last4.onnx"        # 模型文件路径
+
 detection:
   confidence_threshold: 0.5
   nms_threshold: 0.25
@@ -14,6 +17,8 @@ display:
   line_thickness: 2
 
 camera:
+  exposure_time: 15000             # 手动曝光时间(微秒)，-1=自动曝光
+  analog_gain: -1               # 模拟增益，-1=自动
   reconnect_threshold: 50      # 连续空帧阈值（达到后触发重连）
   reconnect_delay_ms: 500      # 重连前等待时间(ms)，给驱动释放资源的时间
 

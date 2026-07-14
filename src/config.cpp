@@ -14,6 +14,11 @@ VisionConfig loadVisionConfig(const std::string& filepath)
     try {
         YAML::Node root = YAML::LoadFile(filepath);
         //yaml-cpp 语法：如果配置文件无该字段 / 字段解析失败，直接使用括号内默认值
+        if (root["model"])
+        {
+            if (root["model"]["model_path"])
+                cfg.model_path = root["model"]["model_path"].as<std::string>();
+        }
         if (root["detection"])
         {
             if (root["detection"]["confidence_threshold"])
@@ -29,6 +34,10 @@ VisionConfig loadVisionConfig(const std::string& filepath)
         }
         if (root["camera"])
         {
+            if (root["camera"]["exposure_time"])
+                cfg.exposure_time = root["camera"]["exposure_time"].as<double>();
+            if (root["camera"]["analog_gain"])
+                cfg.analog_gain = root["camera"]["analog_gain"].as<int>();
             if (root["camera"]["reconnect_threshold"])
                 cfg.reconnect_threshold = root["camera"]["reconnect_threshold"].as<int>();
             if (root["camera"]["reconnect_delay_ms"])

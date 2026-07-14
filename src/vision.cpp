@@ -299,10 +299,11 @@ int main()
     auto colors                   = buildColorTable(CLASS_NAMES.size());
 
     YOLODetector detector;
-    bool modelOk = initDetector(detector, resolveProjectPath("best.onnx"), cfg);
+    bool modelOk = initDetector(detector, resolveProjectPath(cfg.model_path), cfg);
 
     Camera cam;
-    if (!cam.open(cfg.input_width, cfg.input_height)) {
+    if (!cam.open(cfg.input_width, cfg.input_height,
+                  cfg.exposure_time, cfg.analog_gain)) {
         std::cerr << "相机打开失败" << std::endl;
         return -1;
     }

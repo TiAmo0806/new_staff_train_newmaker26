@@ -26,6 +26,9 @@ inline const std::vector<std::string> CLASS_NAMES = {
 //可调参数结构体
 struct VisionConfig
 {
+    //模型参数
+    std::string model_path = "best.onnx"; // 模型文件路径
+
     //模型推理参数
     float confidence_threshold = 0.35f;   // 置信度阈值
     float nms_threshold = 0.25f;          // NMS IoU 阈值
@@ -37,6 +40,10 @@ struct VisionConfig
     double font_scale = 0.6;              // 文字大小
     int font_thickness = 2;               // 文字粗细
     int line_thickness = 2;               // 检测框边框粗细
+
+    //相机曝光参数
+    double exposure_time = -1.0;           // 手动曝光时间(微秒)，-1=自动曝光
+    int analog_gain = -1;                  // 模拟增益，-1=自动
 
     //相机重连参数
     int reconnect_threshold = 50;         // 连续空帧阈值

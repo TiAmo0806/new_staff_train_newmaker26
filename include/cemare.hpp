@@ -19,7 +19,10 @@ public:
     ~Camera();
 
     // 打开相机（自动枚举第一个可用相机）
-    bool open(int width = 640, int height = 480);
+    // exposure_time: 手动曝光时间(微秒)，-1=自动曝光
+    // analog_gain:   模拟增益，-1=自动
+    bool open(int width = 640, int height = 480,
+              double exposureTime = -1.0, int analogGain = -1);
 
     // 获取一帧图像（阻塞，返回 BGR 格式 cv::Mat）
     cv::Mat getFrame();
@@ -49,6 +52,8 @@ private:
     bool opened_;
     unsigned char* rgb_buffer_;         // BGR 图像缓存
     int emptyCount_ = 0;                // 连续空帧计数
+    double exposureTime_ = -1.0;        // 保存曝光时间用于重连
+    int analogGain_ = -1;               // 保存模拟增益用于重连
 
     CamState camState_ = CamState::NORMAL;
     std::chrono::steady_clock::time_point waitStart_;

@@ -27,7 +27,7 @@ Camera::~Camera()
     close();
 }
 
-bool Camera::open(int width, int height)
+bool Camera::open(int width, int height, double exposureTime, int analogGain)
 {
     if (opened_) {
         close();
@@ -83,6 +83,19 @@ bool Camera::open(int width, int height)
 
     // 8. 开始采集
     CameraPlay(hCamera_);
+
+    // 9. 保存并应用曝光参数
+    exposureTime_ = exposureTime;
+    analogGain_   = analogGain;
+    if (exposureTime > 0) {
+        CameraSetAeState(hCamera_, FALSE);               // 关闭自动曝光
+        CameraSetExposureTime(hCamera_, exposureTime);   // 手动曝光时间(微秒)
+        std::cout << "手动曝光: " << exposureTime << " us" << std::endl;
+    }
+    if (analogGain > 0) {
+        CameraSetAnalogGain(hCamera_, analogGain);       // 模拟增益
+        std::cout << "模拟增益: " << analogGain << std::endl;
+    }
 
     width_ = width;
     height_ = height;
@@ -158,7 +171,7 @@ std::optional<cv::Mat> Camera::getFrameSafe(int emptyThreshold,
         auto elapsed = duration_cast<milliseconds>(
             steady_clock::now() - waitStart_).count();
         if (elapsed >= reconnectDelayMs) {
-            if (open(width_, height_)) {
+            if (open(width_, height_, exposureTime_, analogGain_)) {
                 std::cout << "相机重连成功" << std::endl;
                 camState_ = CamState::NORMAL;
                 emptyCount_ = 0;
