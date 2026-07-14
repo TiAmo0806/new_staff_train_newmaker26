@@ -26,14 +26,49 @@ struct SerialConfig
     // true 表示收到合法的相机控制帧后打印完整十六进制帧和camera_state。
     // 关闭后仍会打印CRC错误、非法状态等异常信息，方便发现协议不一致。
     bool rxLog = true;                  // 是否打印电控发给视觉的接收帧
+
+    // 视觉结果发出后等待电控ACK的时间。超过该时间仍未收到匹配ACK时，
+    // main会使用完全相同的CMD、SEQ和DATA重新发送，避免电控漏收后双方流程错位。
+    int ackTimeoutMs = 300;             // ACK超时重发间隔，单位毫秒
 };
 
 struct VisionTxPacket
 {
-    // 这里只保存[CMD][DATA...]，不含帧头和CRC。
-    // buildWorkflowPacket() 负责生成载荷，sendPacket() 负责封帧，职责不要混用，
-    // 否则容易发生帧头重复或 CRC 计算范围不一致。
-    std::vector<uint8_t> payload;   // 最简业务载荷：[CMD][固定长度DATA]
+    // 业务包把CMD、SEQ、DATA分开保存，sendPacket()再统一封装线路帧。
+    // SEQ用于把ACK与某一次识别结果严格对应；重发时三个字段必须保持不变。
+    uint8_t command = 0;            // 业务命令：0x10/0x11/0x20/0x21
+    uint8_t sequence = 0;           // 结果序号：1~255，0保留不用
+    std::vector<uint8_t> data;      // 每种CMD对应的固定长度业务数据
+};
+
+// 电控确认视觉结果时发送的固定命令码。
+// 第二字节使用0x80，因此不会和原有camera_state=0/1混淆。
+constexpr uint8_t RESULT_ACK_COMMAND = 0x80;
+
+// ACK状态码。0表示电控已经通过CRC和业务检查并接受结果；
+// 非0表示电控拒绝该结果，视觉保留待确认包并在超时后使用同一SEQ重发。
+enum class ResultAckStatus : uint8_t
+{
+    Ok = 0x00,            // 已正确接收并接受
+    InvalidData = 0x01,   // DATA长度或内容不合法
+    WrongStage = 0x02     // 电控当前阶段不接受该CMD
+};
+
+// 串口接收层一次可能解析出相机控制帧或结果ACK帧，使用统一事件交给main处理，
+// 避免两个接收函数争抢同一个Linux串口缓存。
+enum class SerialRxEventType : uint8_t
+{
+    CameraState,          // [5A][0/1][CRC_L][CRC_H]
+    ResultAck             // [5A][80][SEQ][原CMD][STATUS][CRC_L][CRC_H]
+};
+
+struct SerialRxEvent
+{
+    SerialRxEventType type = SerialRxEventType::CameraState;
+    uint8_t cameraState = 0;       // type=CameraState时有效，只可能为0或1
+    uint8_t sequence = 0;          // type=ResultAck时有效
+    uint8_t originalCommand = 0;   // ACK确认的原视觉CMD
+    uint8_t status = 0;            // ResultAckStatus对应的uint8_t值
 };
 
 // 电控发给视觉的相机控制帧固定为4字节，不使用可变长度结构体：
@@ -60,6 +95,7 @@ public:
     static constexpr uint8_t FRAME_HEADER = 0xA6;             // 视觉->电控
     static constexpr uint8_t RX_FRAME_HEADER = 0x5A;          // 电控->视觉
     static constexpr size_t CAMERA_CONTROL_FRAME_SIZE = 4;    // 5A+状态+CRC16
+    static constexpr size_t RESULT_ACK_FRAME_SIZE = 7;        // 5A+80+SEQ+原CMD+状态+CRC16
 
     explicit VirtualSerial(const SerialConfig &config);
     ~VirtualSerial();
@@ -68,16 +104,15 @@ public:
     void closePort();
     bool isOpen() const;
 
-    // 打包为：[0xA6][payload...][CRC低字节][CRC高字节]。
-    // CRC 覆盖帧头和全部 payload，不覆盖末尾两个 CRC 占位字节。
-    // payload内部只有CMD和该CMD对应的固定长度DATA。
+    // 打包为：[0xA6][CMD][SEQ][DATA...][CRC低字节][CRC高字节]。
+    // CRC覆盖帧头、CMD、SEQ和全部DATA，不覆盖末尾两个CRC占位字节。
+    // 同一个待确认结果重发时，CMD、SEQ、DATA必须完全相同。
     bool sendPacket(const VisionTxPacket &packet, int maxRetries = 3);
 
-    // 非阻塞读取电控发送的相机开关命令。
-    // 返回true：成功解析出一帧，cameraState只可能为0或1。
-    // 返回false：当前没有完整帧、CRC错误、非法状态或串口暂时不可用。
-    // 本函数不会等待4字节一次性到齐；半帧会保存在receiveBuffer_中，下次继续接收。
-    bool receiveCameraState(uint8_t &cameraState);
+    // 非阻塞读取电控发送的相机控制或结果ACK。
+    // 返回true：成功解析出一个完整事件；返回false：当前没有完整合法帧。
+    // Linux一次read可能得到半帧、一帧或多帧，未解析完的字节会留到下次继续处理。
+    bool receiveEvent(SerialRxEvent &event);
 
 private:
     bool configurePort();               // 配置 termios：115200-8-N-1，无流控，原始模式

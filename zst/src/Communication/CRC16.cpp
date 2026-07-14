@@ -5,7 +5,7 @@ namespace crc16
 {
 uint16_t Calc(const uint8_t *data, int length)
 {
-    // 裁判系统CRC16。
+    // 与电控referee.c、26new飞镖完全一致的裁判系统CRC16。
     // 其查表实现来自反向多项式0x8408；这里使用等价的逐位算法，结果逐字节相同。
     uint16_t crc = 0xFFFF;                      // 裁判系统CRC16固定初值
     for (int i = 0; i < length; ++i)

@@ -17,16 +17,19 @@ uint8_t expectedDataLength(VisionMessageType type)
 }
 
 VisionTxPacket buildWorkflowPacket(VisionMessageType type,
+                                   uint8_t sequence,
                                    const std::vector<uint8_t> &data)
 {
     const uint8_t expected = expectedDataLength(type);
     if (expected == 0 || data.size() != expected)
         throw std::invalid_argument("invalid DATA length for vision command");
+    if (sequence == 0)
+        throw std::invalid_argument("vision packet sequence must be 1..255");
 
     VisionTxPacket packet;
-    packet.payload.reserve(1 + data.size());
-    packet.payload.push_back(static_cast<uint8_t>(type));   // [0] CMD
-    packet.payload.insert(packet.payload.end(), data.begin(), data.end()); // [1..] DATA
+    packet.command = static_cast<uint8_t>(type);            // CMD：业务消息类型
+    packet.sequence = sequence;                             // SEQ：用于匹配ACK和去重
+    packet.data = data;                                     // DATA：固定长度业务数据
     return packet;
 }
 

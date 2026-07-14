@@ -4,6 +4,7 @@
 #include "Communication/VisionProtocol.h"
 #include "ImgProcessing/FieldStateCollector.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,12 +21,12 @@ struct CompetitionWorkflowConfig
     // 默认0.40表示只接受画面横向30%~70%范围内的豆子；A组完全不使用此参数。
     float teamBCenterWidthRatio = 0.40f;
 
-    // true时，每次串口成功发送后把稳定结果和当前阶段保存到progressFile。
-    // 下次重新启动会恢复断点，适合比赛中关闭相机程序后继续下一识别阶段。
+    // true时，只在收到电控的正确ACK后保存稳定结果和已推进阶段。
+    // Linux write()成功但ACK未到达时不保存，避免把“写入驱动”误当成“电控已接受”。
     bool resumeProgress = true;
 
     // 进度文件路径由Utils按zst项目根目录解析成绝对路径。
-    // 文件只保存已成功发送的阶段，不保存尚未完成的临时投票帧。
+    // 文件只保存已收到ACK的阶段，不保存尚未完成的临时投票帧。
     std::string progressFile = "runtime/workflow_progress.txt";
 };
 
@@ -53,15 +54,31 @@ public:
     // 调试窗口按R时调用；新一场比赛开始前必须执行一次，避免沿用上一场结果。
     void reset();
 
-    // main只有在VirtualSerial::sendPacket()返回成功后才调用本函数。
-    // 它把当前阶段和稳定结果写入磁盘，使“成功发送后退出程序”可以断点续跑。
-    void confirmPacketSent(const VisionTxPacket &packet);
+    // 处理电控返回的结果ACK。
+    // 只有SEQ、原CMD都与当前待确认包一致且status=0时，才会推进A/B阶段并保存断点。
+    // 返回true表示本次ACK被接受；错误SEQ、错误CMD、NACK和过期重复ACK均返回false。
+    bool confirmPacketAcknowledged(uint8_t sequence,
+                                   uint8_t originalCommand,
+                                   uint8_t status);
+
+    // WaitingAck期间停止新的识别投票。main通过pendingPacket()取得原包并超时重发，
+    // 重发必须使用同一个CMD、SEQ和DATA，不能重新生成序号。
+    bool waitingForAck() const;
+    const VisionTxPacket *pendingPacket() const;
 
     TeamMode mode() const;                  // 获取当前队伍模式
     bool finished() const;                  // 当前队伍流程是否已完成
     const FieldState &state() const;       // 获取当前已保存的整场状态
 
 private:
+    // 结果发送子状态与A/B业务阶段分开：业务阶段记录“正在识别什么”，
+    // deliveryState_=WaitingAck时冻结业务阶段，直到电控确认当前结果。
+    enum class ResultDeliveryState
+    {
+        Idle,       // 当前没有待确认结果，可以继续识别
+        WaitingAck  // 已生成结果，等待匹配ACK，期间只允许重发原包
+    };
+
     // 队伍A的流程非常线性：先收齐五个数字，再收齐三个豆子，最后结束。
     enum class TeamAStage
     {
@@ -85,13 +102,21 @@ private:
     // 只清内存，不删除磁盘文件；构造时先初始化内存，再尝试从进度文件恢复。
     void resetMemory();
 
-    // 断点文件只保存已成功发送的稳定状态。加载失败/模式不匹配时返回false并从头开始。
+    // 断点文件只保存已经收到ACK的稳定状态和下一SEQ。
+    // 加载失败/模式不匹配时返回false并从头开始。
     bool loadProgress();
     bool saveProgress() const;
     void clearProgressFile() const;
 
-    // 将业务DATA与CMD组合为最简payload：[CMD][DATA...]。
-    VisionTxPacket makePacket(VisionMessageType type, const std::vector<uint8_t> &data);
+    // 建立唯一待确认结果：[CMD][SEQ][DATA]，同时进入WaitingAck。
+    // 当前已有待确认结果时不会再调用本函数生成第二条消息。
+    VisionTxPacket queuePacket(VisionMessageType type, const std::vector<uint8_t> &data);
+
+    // 收到匹配且status=0的ACK后，根据当前队伍和CMD推进业务阶段。
+    bool advanceStageAfterAck(uint8_t acknowledgedCommand);
+
+    // 当前ACK完成后生成下一个1~255序号；0始终保留为无效值。
+    void advanceSequence();
 
     std::vector<VisionTxPacket> updateTeamA(const std::vector<Detection> &detections);
     std::vector<VisionTxPacket> updateTeamB(const std::vector<Detection> &detections,
@@ -113,6 +138,9 @@ private:
     FieldStateCollector collector_;    // 跨帧投票及最终 FieldState
     TeamAStage teamAStage_ = TeamAStage::WaitingDigits;
     TeamBStage teamBStage_ = TeamBStage::WaitingFirstBean;
+    ResultDeliveryState deliveryState_ = ResultDeliveryState::Idle;
+    std::optional<VisionTxPacket> pendingPacket_; // WaitingAck期间保存原包供匹配和重发
+    uint8_t nextSequence_ = 1;                    // 下一条新结果使用的SEQ，范围1~255
 };
 
 #endif // COMPETITION_WORKFLOW_H

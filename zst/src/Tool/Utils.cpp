@@ -121,11 +121,30 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
             if (s["simulated"]) config.serial.simulated = s["simulated"].as<bool>();
             if (s["tx_log"]) config.serial.txLog = s["tx_log"].as<bool>();
             if (s["rx_log"]) config.serial.rxLog = s["rx_log"].as<bool>();
+            if (s["ack_timeout_ms"])
+                config.serial.ackTimeoutMs =
+                    std::clamp(s["ack_timeout_ms"].as<int>(), 50, 5000);
         }
 
         if (y["runtime"])
         {
             const auto r = y["runtime"];
+            if (r["mode"])
+            {
+                // competition：等待电控camera_state；debug：启动后直接打开相机。
+                const std::string mode = r["mode"].as<std::string>();
+                if (mode == "competition")
+                    config.runMode = AppRunMode::Competition;
+                else if (mode == "debug")
+                    config.runMode = AppRunMode::Debug;
+                else
+                {
+                    // 不接受拼写错误后静默进入调试模式，防止比赛时相机意外启动。
+                    std::cerr << "[Config] runtime.mode只能是competition或debug，当前值="
+                              << mode << std::endl;
+                    return false;
+                }
+            }
             if (r["show_window"]) config.showWindow = r["show_window"].as<bool>();
             if (r["save_video"]) config.saveVideo = r["save_video"].as<bool>();
             if (r["log_dir"]) config.logDir = r["log_dir"].as<std::string>();

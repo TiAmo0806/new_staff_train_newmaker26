@@ -13,7 +13,7 @@ enum class TeamMode : uint8_t
     TeamB = 2   // 中心豆子、数字数组、剩余中心豆子分阶段发送，豆子顺序不固定
 };
 
-// 视觉单向发给电控的业务消息类型。
+// 视觉发给电控的业务消息类型；每条结果都需要电控返回ACK。
 enum class VisionMessageType : uint8_t
 {
     DigitsComplete = 0x10, // 队伍A：五个数字位置已全部稳定，DATA为5字节数字
@@ -22,17 +22,19 @@ enum class VisionMessageType : uint8_t
     DigitLayout = 0x21     // 队伍B：5字节，place1~place5上各自识别到的数字
 };
 
-// 最简协议：VirtualSerial在外层添加0xA6和CRC16，本函数生成[CMD][DATA...]。
-// CMD就是VisionMessageType，每种CMD的数据长度固定，因此不再发送LENGTH。
+// 最简可靠协议：本函数生成独立的CMD、SEQ、DATA，VirtualSerial负责添加0xA6和CRC16。
+// CMD就是VisionMessageType；每种CMD的数据长度固定，因此仍然不发送LENGTH。
 //
 // 完整线路帧：
-//   A6 CMD DATA... CRC_L CRC_H
+//   A6 CMD SEQ DATA... CRC_L CRC_H
 //
-// frame[0]=A6，frame[1]=CMD，frame[2...]为固定长度DATA，最后两字节为CRC低/高。
-// CRC覆盖A6、CMD和全部DATA。
+// frame[0]=A6，frame[1]=CMD，frame[2]=SEQ，frame[3...]为固定长度DATA，
+// 最后两字节为CRC低/高。CRC覆盖A6、CMD、SEQ和全部DATA。
+// SEQ范围为1~255；视觉超时重发时必须保持相同SEQ，电控用它识别重复结果。
 //
 // 固定长度：10->5字节，11->3字节，20->1字节，21->5字节。
 VisionTxPacket buildWorkflowPacket(VisionMessageType type,
+                                   uint8_t sequence,
                                    const std::vector<uint8_t> &data);
 
 // 根据CMD返回固定DATA长度；未知CMD返回0。

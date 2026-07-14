@@ -8,6 +8,13 @@
 #include <filesystem>
 #include <string>
 
+// 程序运行方式：比赛模式由电控开关相机；调试模式启动后直接打开相机。
+enum class AppRunMode
+{
+    Competition,
+    Debug
+};
+
 // 应用总配置：把YAML各段解析为对应模块能够直接使用的强类型配置。
 struct AppConfig
 {
@@ -15,6 +22,7 @@ struct AppConfig
     VisionSystemConfig vision;              // YOLO、SVM和调试规划器参数
     SerialConfig serial;                    // 串口设备、波特率、模拟模式和TX日志
     CompetitionWorkflowConfig workflow;     // A/B流程、投票和断点续跑参数
+    AppRunMode runMode = AppRunMode::Competition; // 默认比赛模式，避免上电后意外启动相机
     bool showWindow = true;                 // 是否显示OpenCV调试窗口
     bool saveVideo = false;                 // 预留：当前主循环尚未实现录像
     std::string logDir = "logs";            // 预留：当前主循环尚未写日志文件

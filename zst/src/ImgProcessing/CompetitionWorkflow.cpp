@@ -83,7 +83,7 @@ CompetitionWorkflow::CompetitionWorkflow(const CompetitionWorkflowConfig &config
         std::clamp(config_.teamBCenterWidthRatio, 0.05f, 1.0f);
 
     // 构造时不能调用公开reset()，因为reset()会删除磁盘断点。
-    // 先初始化干净内存，再尝试恢复上次“已经成功发送”的比赛进度。
+    // 先初始化干净内存，再尝试恢复上次“已经收到ACK”的比赛进度。
     resetMemory();
     if (!loadProgress())
     {
@@ -117,6 +117,9 @@ void CompetitionWorkflow::resetMemory()
     collector_ = makeCollector();                           // 按当前模式重建收集器
     teamAStage_ = TeamAStage::WaitingDigits;                // TeamA 从数字阶段开始
     teamBStage_ = TeamBStage::WaitingFirstBean;             // TeamB 从任意中心豆子开始
+    deliveryState_ = ResultDeliveryState::Idle;              // 当前没有待确认结果
+    pendingPacket_.reset();                                  // 删除可能残留的待确认包
+    nextSequence_ = 1;                                       // 新比赛第一条结果从SEQ=1开始
 }
 
 void CompetitionWorkflow::reset()
@@ -154,22 +157,27 @@ bool CompetitionWorkflow::loadProgress()
     FieldState savedState;
     int beanCodes[3] = {0, 0, 0};
 
-    // 固定顺序文本格式：
-    // version 1 / mode team_a / stage waiting_beans /
-    // beans b1 b2 b3 / boxes d1 d2 d3 d4 d5
+    int savedNextSequence = 1;
+
+    // version 2比旧格式增加next_sequence。它只在收到ACK后写入，保证程序重启后
+    // 下一条新结果不会复用上一条已经确认的SEQ。旧version 1仍可读取，随后根据阶段推断SEQ。
     bool parsed = readExpectedKey(input, "version") && static_cast<bool>(input >> version)
                && readExpectedKey(input, "mode") && static_cast<bool>(input >> savedMode)
-               && readExpectedKey(input, "stage") && static_cast<bool>(input >> savedStage)
-               && readExpectedKey(input, "beans")
-               && static_cast<bool>(input >> beanCodes[0] >> beanCodes[1] >> beanCodes[2])
-               && readExpectedKey(input, "boxes")
-               && static_cast<bool>(input >> savedState.boxPlaces[0]
-                                                >> savedState.boxPlaces[1]
-                                                >> savedState.boxPlaces[2]
-                                                >> savedState.boxPlaces[3]
-                                                >> savedState.boxPlaces[4]);
+               && readExpectedKey(input, "stage") && static_cast<bool>(input >> savedStage);
+    if (parsed && version == 2)
+        parsed = readExpectedKey(input, "next_sequence")
+              && static_cast<bool>(input >> savedNextSequence);
+    parsed = parsed && (version == 1 || version == 2)
+          && readExpectedKey(input, "beans")
+          && static_cast<bool>(input >> beanCodes[0] >> beanCodes[1] >> beanCodes[2])
+          && readExpectedKey(input, "boxes")
+          && static_cast<bool>(input >> savedState.boxPlaces[0]
+                                           >> savedState.boxPlaces[1]
+                                           >> savedState.boxPlaces[2]
+                                           >> savedState.boxPlaces[3]
+                                           >> savedState.boxPlaces[4]);
 
-    if (!parsed || version != 1)
+    if (!parsed || (version == 2 && (savedNextSequence < 1 || savedNextSequence > 255)))
     {
         std::cerr << "[WorkflowResume] 进度文件格式错误，将从头开始: "
                   << config_.progressFile << std::endl;
@@ -241,8 +249,30 @@ bool CompetitionWorkflow::loadProgress()
         return false;
     }
 
+    if (version == 2)
+    {
+        nextSequence_ = static_cast<uint8_t>(savedNextSequence);
+    }
+    else if (config_.mode == TeamMode::TeamA)
+    {
+        // 兼容旧断点：A组数字、豆子依次使用SEQ=1、2，完成后下一SEQ为3。
+        nextSequence_ = teamAStage_ == TeamAStage::WaitingDigits ? 1
+                      : teamAStage_ == TeamAStage::WaitingBeans ? 2
+                                                               : 3;
+    }
+    else
+    {
+        // 兼容旧断点：B组第1豆子=1、数字=2、第2豆子=3、第3豆子=4。
+        nextSequence_ = teamBStage_ == TeamBStage::WaitingFirstBean ? 1
+                      : teamBStage_ == TeamBStage::WaitingDigits ? 2
+                      : teamBStage_ == TeamBStage::WaitingRemainingBeans
+                          ? static_cast<uint8_t>(2 + collector_.beanCount())
+                          : 5;
+    }
+
     std::cout << "[WorkflowResume] 已恢复: mode=" << savedMode
               << "，stage=" << savedStage
+              << "，next_seq=" << static_cast<int>(nextSequence_)
               << "，豆子=" << collector_.beanCount() << "/3"
               << "，箱位=" << collector_.boxCount() << "/5"
               << "，文件=" << config_.progressFile << std::endl;
@@ -291,9 +321,10 @@ bool CompetitionWorkflow::saveProgress() const
     }
 
     const FieldState &current = collector_.state();
-    output << "version 1\n";
+    output << "version 2\n";
     output << "mode " << teamModeToString(config_.mode) << "\n";
     output << "stage " << stage << "\n";
+    output << "next_sequence " << static_cast<int>(nextSequence_) << "\n";
     output << "beans "
            << static_cast<int>(encodeBeanType(current.beanPlaces[0])) << ' '
            << static_cast<int>(encodeBeanType(current.beanPlaces[1])) << ' '
@@ -344,13 +375,79 @@ void CompetitionWorkflow::clearProgressFile() const
                   << config_.progressFile << std::endl;
 }
 
-void CompetitionWorkflow::confirmPacketSent(const VisionTxPacket &packet)
+bool CompetitionWorkflow::confirmPacketAcknowledged(uint8_t sequence,
+                                                     uint8_t originalCommand,
+                                                     uint8_t status)
 {
-    // 空payload不可能是合法业务消息；不为异常数据建立断点。
-    if (packet.payload.empty()) return;
-    if (!saveProgress())
-        std::cerr << "[WorkflowResume] 串口已发送，但断点保存失败；退出程序后可能无法续跑"
+    if (deliveryState_ != ResultDeliveryState::WaitingAck || !pendingPacket_)
+    {
+        // 常见原因是ACK在线路中重复到达。结果已经推进过时必须忽略，不能重复改变阶段。
+        std::cout << "[WaitingAck] 当前没有待确认结果，忽略过期/重复ACK：seq="
+                  << static_cast<int>(sequence) << ", cmd=0x" << std::hex
+                  << std::uppercase << static_cast<int>(originalCommand) << std::dec
                   << std::endl;
+        return false;
+    }
+
+    const VisionTxPacket &pending = *pendingPacket_;
+    if (sequence != pending.sequence || originalCommand != pending.command)
+    {
+        // ACK必须同时匹配SEQ和原CMD。只匹配其中一个可能把旧结果误认为当前结果。
+        std::cerr << "[WaitingAck] ACK不匹配，继续等待：收到seq="
+                  << static_cast<int>(sequence) << ", cmd=0x" << std::hex
+                  << std::uppercase << static_cast<int>(originalCommand)
+                  << "；期望seq=" << std::dec << static_cast<int>(pending.sequence)
+                  << ", cmd=0x" << std::hex << static_cast<int>(pending.command)
+                  << std::dec << std::endl;
+        return false;
+    }
+
+    if (status != static_cast<uint8_t>(ResultAckStatus::Ok))
+    {
+        // NACK只表示电控拒绝当前结果，不丢弃原包、不推进阶段；main超时后会原样重发。
+        std::cerr << "[WaitingAck] 电控拒绝结果：seq=" << static_cast<int>(sequence)
+                  << "，cmd=0x" << std::hex << std::uppercase
+                  << static_cast<int>(originalCommand) << std::dec
+                  << "，status=" << static_cast<int>(status)
+                  << "；保持当前阶段并等待重发" << std::endl;
+        return false;
+    }
+
+    if (!advanceStageAfterAck(originalCommand))
+    {
+        std::cerr << "[WaitingAck] ACK虽然匹配，但当前业务阶段与CMD不一致，未推进流程"
+                  << std::endl;
+        return false;
+    }
+
+    std::cout << "[WaitingAck] ACK确认成功：seq=" << static_cast<int>(sequence)
+              << "，cmd=0x" << std::hex << std::uppercase
+              << static_cast<int>(originalCommand) << std::dec
+              << "，现在推进阶段并保存断点" << std::endl;
+
+    pendingPacket_.reset();
+    deliveryState_ = ResultDeliveryState::Idle;
+    advanceSequence();
+    if (!saveProgress())
+        std::cerr << "[WorkflowResume] ACK已收到，但断点保存失败；退出程序后可能重复当前阶段"
+                   << std::endl;
+    return true;
+}
+
+bool CompetitionWorkflow::waitingForAck() const
+{
+    return deliveryState_ == ResultDeliveryState::WaitingAck && pendingPacket_.has_value();
+}
+
+const VisionTxPacket *CompetitionWorkflow::pendingPacket() const
+{
+    return waitingForAck() ? &(*pendingPacket_) : nullptr;
+}
+
+void CompetitionWorkflow::advanceSequence()
+{
+    // uint8_t达到255后回到1，永远跳过保留值0。
+    nextSequence_ = nextSequence_ == 255 ? 1 : static_cast<uint8_t>(nextSequence_ + 1);
 }
 
 void CompetitionWorkflow::switchMode(TeamMode mode)
@@ -379,11 +476,15 @@ const FieldState &CompetitionWorkflow::state() const
     return collector_.state();
 }
 
-VisionTxPacket CompetitionWorkflow::makePacket(VisionMessageType type,
-                                                const std::vector<uint8_t> &data)
+VisionTxPacket CompetitionWorkflow::queuePacket(VisionMessageType type,
+                                                 const std::vector<uint8_t> &data)
 {
+    // 同一时刻最多允许一个未确认结果。该约束让ACK匹配、重发和断点推进保持确定。
+    if (waitingForAck()) return *pendingPacket_;
+
     std::cout << "[发送准备] mode=" << teamModeToString(config_.mode)
               << ", cmd=" << visionMessageTypeToString(type)
+              << ", seq=" << static_cast<int>(nextSequence_)
               << ", data=[";
     for (size_t i = 0; i < data.size(); ++i)
     {
@@ -391,13 +492,21 @@ VisionTxPacket CompetitionWorkflow::makePacket(VisionMessageType type,
         std::cout << static_cast<int>(data[i]);
     }
     std::cout << "]" << std::endl;
-    return buildWorkflowPacket(type, data);
+
+    pendingPacket_ = buildWorkflowPacket(type, nextSequence_, data);
+    deliveryState_ = ResultDeliveryState::WaitingAck;
+    std::cout << "[WaitingAck] 结果已生成，冻结当前识别阶段，等待电控ACK" << std::endl;
+    return *pendingPacket_;
 }
 
 std::vector<VisionTxPacket> CompetitionWorkflow::update(
     const std::vector<Detection> &detections,
     int imageWidth)
 {
+    // WaitingAck期间不再累计任何新帧，也不生成下一阶段结果。
+    // 这样即使ACK丢失，视觉和电控也会停留在同一个业务步骤，只重发原结果。
+    if (waitingForAck()) return {};
+
     // 流程结束后不再累计投票，也不重复发送完成消息。
     if (finished()) return {};                              // 已完成，直接返回空
 
@@ -405,6 +514,66 @@ std::vector<VisionTxPacket> CompetitionWorkflow::update(
     return config_.mode == TeamMode::TeamA
         ? updateTeamA(detections)                           // TeamA 流程
         : updateTeamB(detections, imageWidth);              // TeamB 中心豆子流程
+}
+
+bool CompetitionWorkflow::advanceStageAfterAck(uint8_t acknowledgedCommand)
+{
+    const auto command = static_cast<VisionMessageType>(acknowledgedCommand);
+
+    if (config_.mode == TeamMode::TeamA)
+    {
+        if (teamAStage_ == TeamAStage::WaitingDigits &&
+            command == VisionMessageType::DigitsComplete)
+        {
+            teamAStage_ = TeamAStage::WaitingBeans;
+            std::cout << "[A组状态] 数字结果已被电控确认，下一步：识别3个豆子"
+                      << std::endl;
+            return true;
+        }
+        if (teamAStage_ == TeamAStage::WaitingBeans &&
+            command == VisionMessageType::BeansComplete)
+        {
+            teamAStage_ = TeamAStage::Finished;
+            std::cout << "[A组状态] 豆子结果已被电控确认，A组视觉流程完成"
+                      << std::endl;
+            return true;
+        }
+        return false;
+    }
+
+    if (teamBStage_ == TeamBStage::WaitingFirstBean &&
+        command == VisionMessageType::BeanCode)
+    {
+        teamBStage_ = TeamBStage::WaitingDigits;
+        std::cout << "[B组状态] 第一个豆子已被电控确认，下一步：识别5个数字位置"
+                  << std::endl;
+        return true;
+    }
+    if (teamBStage_ == TeamBStage::WaitingDigits &&
+        command == VisionMessageType::DigitLayout)
+    {
+        teamBStage_ = TeamBStage::WaitingRemainingBeans;
+        std::cout << "[B组状态] 数字数组已被电控确认，下一步：识别中心位置的新豆子"
+                  << std::endl;
+        return true;
+    }
+    if (teamBStage_ == TeamBStage::WaitingRemainingBeans &&
+        command == VisionMessageType::BeanCode)
+    {
+        if (collector_.beanReady())
+        {
+            teamBStage_ = TeamBStage::Finished;
+            std::cout << "[B组状态] 第三个豆子已被电控确认，B组视觉流程完成"
+                      << std::endl;
+        }
+        else
+        {
+            std::cout << "[B组状态] 当前豆子已被电控确认，继续等待中心位置的未识别豆子"
+                      << std::endl;
+        }
+        return true;
+    }
+    return false;
 }
 
 std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamA(
@@ -423,9 +592,8 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamA(
             std::cout << "[A组识别] 5个箱位数字全部识别完成" << std::endl;
             logDigitLayout();                              // 输出place1~place5的完整数字布局
             // DATA为5字节：依次表示物理箱位A~E上识别到的数字。
-            // 生成消息后立即进入豆子阶段；单向版本不等待电控ACK。
-            packets.push_back(makePacket(VisionMessageType::DigitsComplete, digitsData()));
-            teamAStage_ = TeamAStage::WaitingBeans;         // 进入豆子阶段
+            // 只建立待确认结果，不提前进入豆子阶段；收到匹配ACK后才推进。
+            packets.push_back(queuePacket(VisionMessageType::DigitsComplete, digitsData()));
         }
         return packets;
     }
@@ -443,8 +611,7 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamA(
             for (int beanIndex = 0; beanIndex < 3; ++beanIndex)
                 logBeanResult(beanIndex, "A组豆子匹配");
             // A组只发送三个豆子的识别数组，不再发送包含target_place的FinalResult。
-            packets.push_back(makePacket(VisionMessageType::BeansComplete, beansData()));
-            teamAStage_ = TeamAStage::Finished;             // TeamA 流程结束
+            packets.push_back(queuePacket(VisionMessageType::BeansComplete, beansData()));
         }
     }
     return packets;
@@ -466,11 +633,8 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamB(
         if (collector_.beanCount() > before)
         {
             logBeanResult(before, "第一个中心豆子识别完成");
-            packets.push_back(makePacket(VisionMessageType::BeanCode,
-                                         beanCodeData(before)));
-            teamBStage_ = TeamBStage::WaitingDigits;
-            std::cout << "[B组状态] 第一个豆子已记忆并发送，下一步：识别5个数字位置"
-                      << std::endl;
+            packets.push_back(queuePacket(VisionMessageType::BeanCode,
+                                          beanCodeData(before)));
         }
         return packets;
     }
@@ -485,10 +649,7 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamB(
             logDigitLayout();                              // 只在5个箱位全部稳定后输出一次
             // 此时数字位置已知，补充显示第一个豆子对应数字位于第几个位置。
             logBeanResult(0, "第一个豆子位置匹配");
-            packets.push_back(makePacket(VisionMessageType::DigitLayout, digitsData()));
-            teamBStage_ = TeamBStage::WaitingRemainingBeans;
-            std::cout << "[B组状态] 数字数组已发送，下一步：继续识别中心位置的新豆子"
-                      << std::endl;
+            packets.push_back(queuePacket(VisionMessageType::DigitLayout, digitsData()));
         }
         return packets;
     }
@@ -503,19 +664,8 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamB(
         if (collector_.beanCount() > before)
         {
             logBeanResult(before, "新的中心豆子识别完成");
-            packets.push_back(makePacket(VisionMessageType::BeanCode,
-                                         beanCodeData(before)));
-            if (collector_.beanReady())
-            {
-                teamBStage_ = TeamBStage::Finished;
-                std::cout << "[B组状态] 三种豆子均已记忆并发送，B组视觉流程完成"
-                          << std::endl;
-            }
-            else
-            {
-                std::cout << "[B组状态] 新豆子已记忆并发送，继续等待中心位置的未识别豆子"
-                          << std::endl;
-            }
+            packets.push_back(queuePacket(VisionMessageType::BeanCode,
+                                          beanCodeData(before)));
         }
         return packets;
     }
