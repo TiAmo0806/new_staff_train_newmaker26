@@ -1,6 +1,6 @@
 /**
  * @file VirtualSerial.cpp
- * @brief 串口通信类实现（仅发送检测排序结果）
+ * @brief 串口通信类实现（双向通信：TX 发送检测结果 + RX 接收电控指令）
  * @author lxy
  * @date 2025-10-24
  */
@@ -57,6 +57,7 @@ void VirtualSerial::Close()
         close(serialFd_);
         serialFd_ = -1;
     }
+    rxBuffer_.clear();
 }
 
 // ============================================================
@@ -251,4 +252,79 @@ bool VirtualSerial::TryReconnect()
     }
 
     return false;
+}
+
+// ============================================================
+// PollReceive — 非阻塞轮询接收（双向通信 RX 路径）
+// ============================================================
+void VirtualSerial::PollReceive()
+{
+    if (simulated_ || !IsOpen()) return;
+
+    // ---- 非阻塞读取串口 ----
+    uint8_t temp[64];
+    ssize_t n = read(serialFd_, temp, sizeof(temp));
+    if (n > 0) {
+        rxBuffer_.insert(rxBuffer_.end(), temp, temp + n);
+
+        // 防止垃圾数据导致缓冲区无限增长（MCU 帧为 4 字节，128 足够）
+        if (rxBuffer_.size() > 128) {
+            rxBuffer_.erase(rxBuffer_.begin(),
+                            rxBuffer_.begin() + (rxBuffer_.size() - 128));
+        }
+    }
+
+    // ---- 解析缓冲区中的帧（可能有多帧积压） ----
+    while (ParseRxBuffer()) {
+        // ParseRxBuffer 内部处理成功时移除已处理字节
+    }
+}
+
+// ============================================================
+// ParseRxBuffer — 从缓冲区扫描并提取一个完整帧
+// ============================================================
+bool VirtualSerial::ParseRxBuffer()
+{
+    // 查找帧头 0x5A
+    auto it = std::find(rxBuffer_.begin(), rxBuffer_.end(), 0x5A);
+    if (it == rxBuffer_.end()) {
+        // 没有帧头，清空（全是垃圾数据）
+        rxBuffer_.clear();
+        return false;
+    }
+
+    // 丢弃帧头之前的垃圾字节
+    if (it != rxBuffer_.begin()) {
+        rxBuffer_.erase(rxBuffer_.begin(), it);
+    }
+
+    // 帧头在位置 0，检查是否有完整帧（固定 4 字节）
+    if (rxBuffer_.size() < 4) return false;   // 等待更多数据
+
+    // 提取完整帧
+    uint8_t frame[4];
+    std::copy(rxBuffer_.begin(), rxBuffer_.begin() + 4, frame);
+
+    // 校验 CRC 并分发
+    HandleValidFrame(frame);
+
+    // 无论校验是否通过，移除这 4 字节（无效帧也要丢弃，防止死循环）
+    rxBuffer_.erase(rxBuffer_.begin(), rxBuffer_.begin() + 4);
+    return true;
+}
+
+// ============================================================
+// HandleValidFrame — CRC 校验 + 回调分发
+// ============================================================
+void VirtualSerial::HandleValidFrame(const uint8_t * frame)
+{
+    ReceivePacket packet;
+    if (!parseReceivePacket(frame, packet)) {
+        // CRC 校验失败或 header 不匹配，静默丢弃
+        return;
+    }
+
+    if (rxCallback_) {
+        rxCallback_(packet.action);
+    }
 }

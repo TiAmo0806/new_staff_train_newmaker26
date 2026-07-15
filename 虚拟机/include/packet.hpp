@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 /**
@@ -69,6 +70,54 @@ inline std::vector<uint8_t> toVector(SendPacket & packet)
   data[TOTAL_LEN - 1] = static_cast<uint8_t>((crc >> 8) & 0x00FF);  // CRC 高字节
 
   return data;
+}
+
+// ============================================================
+// MCU→PC 接收帧（双向通信）
+// ============================================================
+
+/**
+ * @brief MCU→PC 接收帧（固定 4 字节）
+ *
+ * 帧格式（小端序）：
+ *   [header 0x5A] [action 1B] [CRC16 2B]
+ *   总计固定 4 字节
+ *
+ * action 含义：
+ *   0 = 停止采集（暂停推理+发送）
+ *   1 = 开始采集（恢复推理+发送）
+ *
+ * 使用方式：
+ *   ReceivePacket packet;
+ *   if (parseReceivePacket(raw, packet)) {
+ *       bool enable = (packet.action == 1);
+ *       // 控制推理开关...
+ *   }
+ */
+struct ReceivePacket
+{
+  uint8_t header;         // [0] 帧头，固定 0x5A
+  uint8_t action;         // [1] 动作：0=停止, 1=开始
+  uint16_t crc;           // [2-3] CRC16（小端序，对前 2 字节计算）
+} __attribute__((packed));
+
+/**
+ * @brief 解析原始字节为 ReceivePacket（含 CRC 校验）
+ *
+ * @param raw     指向至少 4 字节的原始数据
+ * @param packet  输出的 ReceivePacket
+ * @return        解析成功（CRC 校验通过 且 header == 0x5A）
+ *
+ * 内部流程：
+ *   1. 对 raw[0..3] 做 CRC16 校验（Verify_CRC16_Check_Sum，对前 2 字节计算）
+ *   2. 校验通过后拷贝到 packet
+ *   3. 最后验证 header 是否为 0x5A
+ */
+inline bool parseReceivePacket(const uint8_t * raw, ReceivePacket & packet)
+{
+  if (!crc16::Verify_CRC16_Check_Sum(raw, 4)) return false;
+  std::memcpy(&packet, raw, 4);
+  return packet.header == 0x5A;
 }
 
 #endif  // MVS_OPENVINO_DEMO__PACKET_HPP_
