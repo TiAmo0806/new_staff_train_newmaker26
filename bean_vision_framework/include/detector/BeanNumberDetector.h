@@ -49,6 +49,13 @@ private:
      * @return 检测框列表。
      */
     std::vector<Detection> detectOnnxRuntime(const cv::Mat& frame);
+    void printModelIoInfo();
+    void printThreadStrategy() const;
+    void recordPerformance(double preprocess_ms,
+                           double inference_ms,
+                           double postprocess_ms,
+                           double total_ms);
+    static std::string shapeToString(const std::vector<int64_t>& shape);
 
     DetectorConfig config_;
     Ort::Env env_;
@@ -57,4 +64,12 @@ private:
     std::vector<std::string> input_names_storage_;
     std::vector<std::string> output_names_storage_;
     bool model_loaded_ = false;
+    bool preprocess_layout_checked_ = false;
+    size_t detect_count_ = 0;
+    size_t perf_sample_count_ = 0;
+    double preprocess_ms_sum_ = 0.0;
+    double inference_ms_sum_ = 0.0;
+    double postprocess_ms_sum_ = 0.0;
+    double total_ms_sum_ = 0.0;
+    std::vector<double> total_ms_samples_;
 };

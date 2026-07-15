@@ -442,6 +442,8 @@ AppConfig AppConfig::load(const std::string& path) {
                 config.detector.conf_threshold = std::stof(value);
             } else if (key == "nms_threshold") {
                 config.detector.nms_threshold = std::stof(value);
+            } else if (key == "intra_op_threads") {
+                config.detector.intra_op_threads = std::stoi(value);
             } else if (key == "class_file") {
                 config.detector.class_file = unquote(value);
             }

@@ -5,9 +5,13 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <numeric>
+#include <sstream>
 
 namespace {
 
@@ -78,6 +82,25 @@ std::vector<float> makeInputTensor(const cv::Mat& bgr_image) {
     return input;
 }
 
+bool areInputsEquivalent(const std::vector<float>& legacy, const cv::Mat& blob, float tolerance) {
+    if (blob.empty() || blob.type() != CV_32F || blob.dims != 4) {
+        return false;
+    }
+    const size_t count = legacy.size();
+    const float* blob_data = blob.ptr<float>();
+    for (size_t i = 0; i < count; ++i) {
+        if (std::abs(legacy[i] - blob_data[i]) > tolerance) {
+            return false;
+        }
+    }
+    return true;
+}
+
+double durationMs(const std::chrono::steady_clock::time_point& begin,
+                  const std::chrono::steady_clock::time_point& end) {
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
 }  // namespace
 
 /**
@@ -111,8 +134,9 @@ bool BeanNumberDetector::loadModel() {
     }
 
     try {
-        // 按已验证示例保持单线程推理，并启用 ORT 全量图优化。
-        session_options_.SetIntraOpNumThreads(1);
+        if (config_.intra_op_threads > 0) {
+            session_options_.SetIntraOpNumThreads(config_.intra_op_threads);
+        }
         session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
         session_ = std::make_unique<Ort::Session>(env_, config_.model_path.c_str(), session_options_);
@@ -138,6 +162,8 @@ bool BeanNumberDetector::loadModel() {
 
     if (model_loaded_) {
         std::cout << "Detector backend: onnxruntime model=" << config_.model_path << "\n";
+        printThreadStrategy();
+        printModelIoInfo();
     }
     return model_loaded_;
 }
@@ -180,17 +206,36 @@ std::vector<Detection> BeanNumberDetector::detectOnnxRuntime(const cv::Mat& fram
     }
 
     constexpr int input_size = 640;
+    const auto detect_begin = std::chrono::steady_clock::now();
     LetterboxInfo info;
     // 先 letterbox，后处理时再用同一组缩放和补边参数还原到原图坐标。
+    const auto preprocess_begin = std::chrono::steady_clock::now();
     cv::Mat input_image = letterbox(frame, input_size, info);
-    std::vector<float> input_tensor_values = makeInputTensor(input_image);
+    cv::Mat blob;
+    cv::dnn::blobFromImage(
+        input_image,
+        blob,
+        1.0 / 255.0,
+        cv::Size(),
+        cv::Scalar(),
+        true,
+        false,
+        CV_32F);
+    if (!preprocess_layout_checked_) {
+        const std::vector<float> legacy_tensor = makeInputTensor(input_image);
+        const bool equivalent = areInputsEquivalent(legacy_tensor, blob, 1e-6f);
+        std::cout << "[YOLO] preprocess_layout="
+                  << (equivalent ? "legacy_eq_blobFromImage" : "mismatch") << "\n";
+        preprocess_layout_checked_ = true;
+    }
+    const auto preprocess_end = std::chrono::steady_clock::now();
 
     Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     std::array<int64_t, 4> input_shape = {1, 3, input_size, input_size};
     Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
         memory_info,
-        input_tensor_values.data(),
-        input_tensor_values.size(),
+        blob.ptr<float>(),
+        static_cast<size_t>(blob.total()),
         input_shape.data(),
         input_shape.size());
 
@@ -205,102 +250,202 @@ std::vector<Detection> BeanNumberDetector::detectOnnxRuntime(const cv::Mat& fram
 
     std::vector<Ort::Value> outputs;
     try {
+        const auto inference_begin = std::chrono::steady_clock::now();
         outputs = session_->Run(
             Ort::RunOptions{nullptr},
             input_names.data(),
             &input_tensor,
             1,
             output_names.data(),
-            output_names.size());
+            output_names_storage_.size() == 1 ? 1 : output_names.size());
+        const auto inference_end = std::chrono::steady_clock::now();
+        const auto postprocess_begin = inference_end;
+
+        if (outputs.empty() || !outputs[0].IsTensor()) {
+            recordPerformance(durationMs(preprocess_begin, preprocess_end),
+                              durationMs(inference_begin, inference_end),
+                              durationMs(postprocess_begin, std::chrono::steady_clock::now()),
+                              durationMs(detect_begin, std::chrono::steady_clock::now()));
+            return detections;
+        }
+
+        float* output_data = outputs[0].GetTensorMutableData<float>();
+        const std::vector<int64_t> output_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+        if (output_shape.size() != 3) {
+            std::cerr << "[ERROR] unsupported YOLO output rank: " << output_shape.size() << "\n";
+            recordPerformance(durationMs(preprocess_begin, preprocess_end),
+                              durationMs(inference_begin, inference_end),
+                              durationMs(postprocess_begin, std::chrono::steady_clock::now()),
+                              durationMs(detect_begin, std::chrono::steady_clock::now()));
+            return detections;
+        }
+
+        const int rows = static_cast<int>(output_shape[1]);
+        const int cols = static_cast<int>(output_shape[2]);
+        if (rows <= 4 || cols <= 0) {
+            recordPerformance(durationMs(preprocess_begin, preprocess_end),
+                              durationMs(inference_begin, inference_end),
+                              durationMs(postprocess_begin, std::chrono::steady_clock::now()),
+                              durationMs(detect_begin, std::chrono::steady_clock::now()));
+            return detections;
+        }
+
+        std::vector<cv::Rect> boxes;
+        std::vector<float> confidences;
+        std::vector<int> class_ids;
+
+        // 当前 YOLO 导出模型输出格式为 1 x C x N：前 4 行是框，后续行是类别分数。
+        for (int i = 0; i < cols; ++i) {
+            float best_score = 0.0f;
+            int best_class = -1;
+            for (int c = 4; c < rows; ++c) {
+                const float score = output_data[c * cols + i];
+                if (score > best_score) {
+                    best_score = score;
+                    best_class = c - 4;
+                }
+            }
+
+            if (best_score < config_.conf_threshold || best_class < 0) {
+                continue;
+            }
+
+            const float cx = output_data[0 * cols + i];
+            const float cy = output_data[1 * cols + i];
+            const float width = output_data[2 * cols + i];
+            const float height = output_data[3 * cols + i];
+
+            // 模型坐标位于 letterbox 图上，需要先去掉补边，再按缩放比例还原回原图。
+            float x1 = (cx - width * 0.5f - info.pad_x) / info.scale;
+            float y1 = (cy - height * 0.5f - info.pad_y) / info.scale;
+            float x2 = (cx + width * 0.5f - info.pad_x) / info.scale;
+            float y2 = (cy + height * 0.5f - info.pad_y) / info.scale;
+
+            x1 = clampValue(x1, 0.0f, static_cast<float>(frame.cols - 1));
+            y1 = clampValue(y1, 0.0f, static_cast<float>(frame.rows - 1));
+            x2 = clampValue(x2, 0.0f, static_cast<float>(frame.cols - 1));
+            y2 = clampValue(y2, 0.0f, static_cast<float>(frame.rows - 1));
+
+            const int box_x = static_cast<int>(std::round(x1));
+            const int box_y = static_cast<int>(std::round(y1));
+            const int box_w = static_cast<int>(std::round(x2 - x1));
+            const int box_h = static_cast<int>(std::round(y2 - y1));
+            if (box_w <= 0 || box_h <= 0) {
+                continue;
+            }
+
+            boxes.emplace_back(box_x, box_y, box_w, box_h);
+            confidences.push_back(best_score);
+            class_ids.push_back(best_class);
+        }
+
+        std::vector<int> keep;
+        cv::dnn::NMSBoxes(boxes, confidences, config_.conf_threshold, config_.nms_threshold, keep);
+
+        detections.reserve(keep.size());
+        for (int index : keep) {
+            const int class_id = class_ids[index];
+            const auto name_it = config_.names.find(class_id);
+            Detection detection;
+            detection.class_id = class_id;
+            detection.class_name = normalizeClassName(
+                name_it != config_.names.end() ? name_it->second : std::to_string(class_id));
+            detection.confidence = confidences[index];
+            detection.box = boxes[index];
+            detections.push_back(detection);
+        }
+
+        std::sort(detections.begin(), detections.end(), [](const Detection& a, const Detection& b) {
+            return a.confidence > b.confidence;
+        });
+
+        const auto postprocess_end = std::chrono::steady_clock::now();
+        recordPerformance(durationMs(preprocess_begin, preprocess_end),
+                          durationMs(inference_begin, inference_end),
+                          durationMs(postprocess_begin, postprocess_end),
+                          durationMs(detect_begin, postprocess_end));
+        return detections;
     } catch (const Ort::Exception& e) {
         std::cerr << "[ERROR] ONNXRuntime inference failed: " << e.what() << "\n";
         return detections;
     }
+}
 
-    if (outputs.empty() || !outputs[0].IsTensor()) {
-        return detections;
+void BeanNumberDetector::printModelIoInfo() {
+    if (session_ == nullptr) {
+        return;
     }
 
-    float* output_data = outputs[0].GetTensorMutableData<float>();
-    const std::vector<int64_t> output_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-    if (output_shape.size() != 3) {
-        std::cerr << "[ERROR] unsupported YOLO output rank: " << output_shape.size() << "\n";
-        return detections;
+    std::cout << "[YOLO] input_count=" << input_names_storage_.size() << "\n";
+    std::cout << "[YOLO] output_count=" << output_names_storage_.size() << "\n";
+    for (size_t i = 0; i < input_names_storage_.size(); ++i) {
+        const auto shape = session_->GetInputTypeInfo(i).GetTensorTypeAndShapeInfo().GetShape();
+        std::cout << "[YOLO] input_shape[" << i << "] "
+                  << input_names_storage_[i] << "=" << shapeToString(shape) << "\n";
+    }
+    for (size_t i = 0; i < output_names_storage_.size(); ++i) {
+        const auto shape = session_->GetOutputTypeInfo(i).GetTensorTypeAndShapeInfo().GetShape();
+        std::cout << "[YOLO] output_shape[" << i << "] "
+                  << output_names_storage_[i] << "=" << shapeToString(shape) << "\n";
+    }
+}
+
+void BeanNumberDetector::printThreadStrategy() const {
+    if (config_.intra_op_threads > 0) {
+        std::cout << "[YOLO] intra_op_threads=" << config_.intra_op_threads << "\n";
+    } else {
+        std::cout << "[YOLO] intra_op_threads=auto\n";
+    }
+}
+
+void BeanNumberDetector::recordPerformance(double preprocess_ms,
+                                           double inference_ms,
+                                           double postprocess_ms,
+                                           double total_ms) {
+    ++detect_count_;
+    if (detect_count_ <= 10) {
+        return;
     }
 
-    const int rows = static_cast<int>(output_shape[1]);
-    const int cols = static_cast<int>(output_shape[2]);
-    if (rows <= 4 || cols <= 0) {
-        return detections;
+    ++perf_sample_count_;
+    preprocess_ms_sum_ += preprocess_ms;
+    inference_ms_sum_ += inference_ms;
+    postprocess_ms_sum_ += postprocess_ms;
+    total_ms_sum_ += total_ms;
+    total_ms_samples_.push_back(total_ms);
+
+    if (perf_sample_count_ % 30 != 0) {
+        return;
     }
 
-    std::vector<cv::Rect> boxes;
-    std::vector<float> confidences;
-    std::vector<int> class_ids;
+    std::vector<double> sorted_total = total_ms_samples_;
+    std::sort(sorted_total.begin(), sorted_total.end());
+    const auto percentile = [&](double ratio) {
+        const size_t index = static_cast<size_t>(std::ceil(ratio * sorted_total.size())) - 1;
+        return sorted_total[std::min(index, sorted_total.size() - 1)];
+    };
 
-    // 当前 YOLO 导出模型输出格式为 1 x C x N：前 4 行是框，后续行是类别分数。
-    for (int i = 0; i < cols; ++i) {
-        float best_score = 0.0f;
-        int best_class = -1;
-        for (int c = 4; c < rows; ++c) {
-            const float score = output_data[c * cols + i];
-            if (score > best_score) {
-                best_score = score;
-                best_class = c - 4;
-            }
+    const double sample_count = static_cast<double>(perf_sample_count_);
+    std::cout << std::fixed << std::setprecision(2)
+              << "[YOLO][PERF] samples=" << perf_sample_count_
+              << " preprocess_ms=" << (preprocess_ms_sum_ / sample_count)
+              << " inference_ms=" << (inference_ms_sum_ / sample_count)
+              << " postprocess_ms=" << (postprocess_ms_sum_ / sample_count)
+              << " detect_total_ms=" << (total_ms_sum_ / sample_count)
+              << " total_p50_ms=" << percentile(0.50)
+              << " total_p95_ms=" << percentile(0.95)
+              << "\n";
+}
+
+std::string BeanNumberDetector::shapeToString(const std::vector<int64_t>& shape) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < shape.size(); ++i) {
+        if (i > 0) {
+            oss << ",";
         }
-
-        if (best_score < config_.conf_threshold || best_class < 0) {
-            continue;
-        }
-
-        const float cx = output_data[0 * cols + i];
-        const float cy = output_data[1 * cols + i];
-        const float width = output_data[2 * cols + i];
-        const float height = output_data[3 * cols + i];
-
-        // 模型坐标位于 letterbox 图上，需要先去掉补边，再按缩放比例还原回原图。
-        float x1 = (cx - width * 0.5f - info.pad_x) / info.scale;
-        float y1 = (cy - height * 0.5f - info.pad_y) / info.scale;
-        float x2 = (cx + width * 0.5f - info.pad_x) / info.scale;
-        float y2 = (cy + height * 0.5f - info.pad_y) / info.scale;
-
-        x1 = clampValue(x1, 0.0f, static_cast<float>(frame.cols - 1));
-        y1 = clampValue(y1, 0.0f, static_cast<float>(frame.rows - 1));
-        x2 = clampValue(x2, 0.0f, static_cast<float>(frame.cols - 1));
-        y2 = clampValue(y2, 0.0f, static_cast<float>(frame.rows - 1));
-
-        const int box_x = static_cast<int>(std::round(x1));
-        const int box_y = static_cast<int>(std::round(y1));
-        const int box_w = static_cast<int>(std::round(x2 - x1));
-        const int box_h = static_cast<int>(std::round(y2 - y1));
-        if (box_w <= 0 || box_h <= 0) {
-            continue;
-        }
-
-        boxes.emplace_back(box_x, box_y, box_w, box_h);
-        confidences.push_back(best_score);
-        class_ids.push_back(best_class);
+        oss << shape[i];
     }
-
-    std::vector<int> keep;
-    cv::dnn::NMSBoxes(boxes, confidences, config_.conf_threshold, config_.nms_threshold, keep);
-
-    detections.reserve(keep.size());
-    for (int index : keep) {
-        const int class_id = class_ids[index];
-        const auto name_it = config_.names.find(class_id);
-        Detection detection;
-        detection.class_id = class_id;
-        detection.class_name = normalizeClassName(
-            name_it != config_.names.end() ? name_it->second : std::to_string(class_id));
-        detection.confidence = confidences[index];
-        detection.box = boxes[index];
-        detections.push_back(detection);
-    }
-
-    std::sort(detections.begin(), detections.end(), [](const Detection& a, const Detection& b) {
-        return a.confidence > b.confidence;
-    });
-    return detections;
+    oss << "]";
+    return oss.str();
 }

@@ -78,6 +78,7 @@ struct DetectorConfig {
     std::string model_path;         // 真实模型路径。
     float conf_threshold = 0.25f;   // 置信度阈值。
     float nms_threshold = 0.45f;    // NMS 阈值，后续真实 YOLO 后端会用到。
+    int intra_op_threads = 1;       // ORT 算子内线程数：0=默认策略，1/2...=显式线程数。
     std::string class_file;         // 类别配置文件路径。
     std::map<int, std::string> names;               // 类别编号到类别名称的映射。
     std::map<std::string, std::string> aliases;     // 类别别名映射，例如 data_1 -> digit_1。
