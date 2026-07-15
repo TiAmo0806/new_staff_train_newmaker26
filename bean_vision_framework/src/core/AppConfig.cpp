@@ -444,6 +444,12 @@ AppConfig AppConfig::load(const std::string& path) {
                 config.detector.nms_threshold = std::stof(value);
             } else if (key == "intra_op_threads") {
                 config.detector.intra_op_threads = std::stoi(value);
+            } else if (key == "performance_logging") {
+                config.detector.performance_logging = parseBool(value);
+            } else if (key == "performance_log_interval") {
+                config.detector.performance_log_interval = std::stoi(value);
+            } else if (key == "performance_window_size") {
+                config.detector.performance_window_size = std::stoi(value);
             } else if (key == "class_file") {
                 config.detector.class_file = unquote(value);
             }

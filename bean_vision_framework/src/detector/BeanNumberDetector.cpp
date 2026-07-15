@@ -7,10 +7,10 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
-#include <numeric>
 #include <sstream>
 
 namespace {
@@ -57,45 +57,6 @@ cv::Mat letterbox(const cv::Mat& image, int input_size, LetterboxInfo& info) {
     return output;
 }
 
-/**
- * @brief 将 BGR 图像转换成 ONNXRuntime 输入张量数据。
- * @param bgr_image 已经 letterbox 到模型输入尺寸的 BGR 图像。
- * @return RGB、float32、归一化后的 CHW 排列数据。
- */
-std::vector<float> makeInputTensor(const cv::Mat& bgr_image) {
-    cv::Mat rgb;
-    cv::cvtColor(bgr_image, rgb, cv::COLOR_BGR2RGB);
-    rgb.convertTo(rgb, CV_32F, 1.0 / 255.0);
-
-    const int channels = 3;
-    const int height = rgb.rows;
-    const int width = rgb.cols;
-    std::vector<float> input(channels * height * width);
-
-    for (int c = 0; c < channels; ++c) {
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
-                input[c * height * width + y * width + x] = rgb.at<cv::Vec3f>(y, x)[c];
-            }
-        }
-    }
-    return input;
-}
-
-bool areInputsEquivalent(const std::vector<float>& legacy, const cv::Mat& blob, float tolerance) {
-    if (blob.empty() || blob.type() != CV_32F || blob.dims != 4) {
-        return false;
-    }
-    const size_t count = legacy.size();
-    const float* blob_data = blob.ptr<float>();
-    for (size_t i = 0; i < count; ++i) {
-        if (std::abs(legacy[i] - blob_data[i]) > tolerance) {
-            return false;
-        }
-    }
-    return true;
-}
-
 double durationMs(const std::chrono::steady_clock::time_point& begin,
                   const std::chrono::steady_clock::time_point& end) {
     return std::chrono::duration<double, std::milli>(end - begin).count();
@@ -116,6 +77,7 @@ BeanNumberDetector::BeanNumberDetector(const DetectorConfig& config)
  */
 bool BeanNumberDetector::loadModel() {
     model_loaded_ = false;
+    sanitizePerformanceConfig();
 
     if (config_.backend == "mock") {
         std::cerr << "Mock detector is disabled for command-driven flow. Use backend=onnxruntime.\n";
@@ -205,11 +167,19 @@ std::vector<Detection> BeanNumberDetector::detectOnnxRuntime(const cv::Mat& fram
         return detections;
     }
 
+    const bool performance_logging = config_.performance_logging;
     constexpr int input_size = 640;
-    const auto detect_begin = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point detect_begin;
+    std::chrono::steady_clock::time_point preprocess_begin;
+    std::chrono::steady_clock::time_point preprocess_end;
+    if (performance_logging) {
+        detect_begin = std::chrono::steady_clock::now();
+    }
     LetterboxInfo info;
     // 先 letterbox，后处理时再用同一组缩放和补边参数还原到原图坐标。
-    const auto preprocess_begin = std::chrono::steady_clock::now();
+    if (performance_logging) {
+        preprocess_begin = std::chrono::steady_clock::now();
+    }
     cv::Mat input_image = letterbox(frame, input_size, info);
     cv::Mat blob;
     cv::dnn::blobFromImage(
@@ -221,14 +191,9 @@ std::vector<Detection> BeanNumberDetector::detectOnnxRuntime(const cv::Mat& fram
         true,
         false,
         CV_32F);
-    if (!preprocess_layout_checked_) {
-        const std::vector<float> legacy_tensor = makeInputTensor(input_image);
-        const bool equivalent = areInputsEquivalent(legacy_tensor, blob, 1e-6f);
-        std::cout << "[YOLO] preprocess_layout="
-                  << (equivalent ? "legacy_eq_blobFromImage" : "mismatch") << "\n";
-        preprocess_layout_checked_ = true;
+    if (performance_logging) {
+        preprocess_end = std::chrono::steady_clock::now();
     }
-    const auto preprocess_end = std::chrono::steady_clock::now();
 
     Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     std::array<int64_t, 4> input_shape = {1, 3, input_size, input_size};
@@ -250,7 +215,10 @@ std::vector<Detection> BeanNumberDetector::detectOnnxRuntime(const cv::Mat& fram
 
     std::vector<Ort::Value> outputs;
     try {
-        const auto inference_begin = std::chrono::steady_clock::now();
+        std::chrono::steady_clock::time_point inference_begin;
+        if (performance_logging) {
+            inference_begin = std::chrono::steady_clock::now();
+        }
         outputs = session_->Run(
             Ort::RunOptions{nullptr},
             input_names.data(),
@@ -258,14 +226,21 @@ std::vector<Detection> BeanNumberDetector::detectOnnxRuntime(const cv::Mat& fram
             1,
             output_names.data(),
             output_names_storage_.size() == 1 ? 1 : output_names.size());
-        const auto inference_end = std::chrono::steady_clock::now();
-        const auto postprocess_begin = inference_end;
+        std::chrono::steady_clock::time_point inference_end;
+        std::chrono::steady_clock::time_point postprocess_begin;
+        if (performance_logging) {
+            inference_end = std::chrono::steady_clock::now();
+            postprocess_begin = inference_end;
+        }
 
         if (outputs.empty() || !outputs[0].IsTensor()) {
-            recordPerformance(durationMs(preprocess_begin, preprocess_end),
-                              durationMs(inference_begin, inference_end),
-                              durationMs(postprocess_begin, std::chrono::steady_clock::now()),
-                              durationMs(detect_begin, std::chrono::steady_clock::now()));
+            if (performance_logging) {
+                const auto now = std::chrono::steady_clock::now();
+                recordPerformance(durationMs(preprocess_begin, preprocess_end),
+                                  durationMs(inference_begin, inference_end),
+                                  durationMs(postprocess_begin, now),
+                                  durationMs(detect_begin, now));
+            }
             return detections;
         }
 
@@ -273,20 +248,26 @@ std::vector<Detection> BeanNumberDetector::detectOnnxRuntime(const cv::Mat& fram
         const std::vector<int64_t> output_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
         if (output_shape.size() != 3) {
             std::cerr << "[ERROR] unsupported YOLO output rank: " << output_shape.size() << "\n";
-            recordPerformance(durationMs(preprocess_begin, preprocess_end),
-                              durationMs(inference_begin, inference_end),
-                              durationMs(postprocess_begin, std::chrono::steady_clock::now()),
-                              durationMs(detect_begin, std::chrono::steady_clock::now()));
+            if (performance_logging) {
+                const auto now = std::chrono::steady_clock::now();
+                recordPerformance(durationMs(preprocess_begin, preprocess_end),
+                                  durationMs(inference_begin, inference_end),
+                                  durationMs(postprocess_begin, now),
+                                  durationMs(detect_begin, now));
+            }
             return detections;
         }
 
         const int rows = static_cast<int>(output_shape[1]);
         const int cols = static_cast<int>(output_shape[2]);
         if (rows <= 4 || cols <= 0) {
-            recordPerformance(durationMs(preprocess_begin, preprocess_end),
-                              durationMs(inference_begin, inference_end),
-                              durationMs(postprocess_begin, std::chrono::steady_clock::now()),
-                              durationMs(detect_begin, std::chrono::steady_clock::now()));
+            if (performance_logging) {
+                const auto now = std::chrono::steady_clock::now();
+                recordPerformance(durationMs(preprocess_begin, preprocess_end),
+                                  durationMs(inference_begin, inference_end),
+                                  durationMs(postprocess_begin, now),
+                                  durationMs(detect_begin, now));
+            }
             return detections;
         }
 
@@ -359,11 +340,13 @@ std::vector<Detection> BeanNumberDetector::detectOnnxRuntime(const cv::Mat& fram
             return a.confidence > b.confidence;
         });
 
-        const auto postprocess_end = std::chrono::steady_clock::now();
-        recordPerformance(durationMs(preprocess_begin, preprocess_end),
-                          durationMs(inference_begin, inference_end),
-                          durationMs(postprocess_begin, postprocess_end),
-                          durationMs(detect_begin, postprocess_end));
+        if (performance_logging) {
+            const auto postprocess_end = std::chrono::steady_clock::now();
+            recordPerformance(durationMs(preprocess_begin, preprocess_end),
+                              durationMs(inference_begin, inference_end),
+                              durationMs(postprocess_begin, postprocess_end),
+                              durationMs(detect_begin, postprocess_end));
+        }
         return detections;
     } catch (const Ort::Exception& e) {
         std::cerr << "[ERROR] ONNXRuntime inference failed: " << e.what() << "\n";
@@ -398,6 +381,37 @@ void BeanNumberDetector::printThreadStrategy() const {
     }
 }
 
+void BeanNumberDetector::sanitizePerformanceConfig() {
+    std::vector<std::string> warnings;
+    if (config_.performance_log_interval <= 0) {
+        config_.performance_log_interval = 30;
+        warnings.push_back("performance_log_interval<=0, fallback to 30");
+    }
+    if (config_.performance_window_size <= 0) {
+        config_.performance_window_size = 120;
+        warnings.push_back("performance_window_size<=0, fallback to 120");
+    }
+    if (!warnings.empty() && !performance_config_warned_) {
+        std::cout << "[YOLO][WARN] invalid performance config:";
+        for (const std::string& warning : warnings) {
+            std::cout << " " << warning;
+        }
+        std::cout << "\n";
+        performance_config_warned_ = true;
+    }
+}
+
+void BeanNumberDetector::pushWindowSample(std::deque<double>& samples, double value, double& sum) {
+    samples.push_back(value);
+    sum += value;
+
+    const size_t window_size = static_cast<size_t>(config_.performance_window_size);
+    if (samples.size() > window_size) {
+        sum -= samples.front();
+        samples.pop_front();
+    }
+}
+
 void BeanNumberDetector::recordPerformance(double preprocess_ms,
                                            double inference_ms,
                                            double postprocess_ms,
@@ -408,30 +422,30 @@ void BeanNumberDetector::recordPerformance(double preprocess_ms,
     }
 
     ++perf_sample_count_;
-    preprocess_ms_sum_ += preprocess_ms;
-    inference_ms_sum_ += inference_ms;
-    postprocess_ms_sum_ += postprocess_ms;
-    total_ms_sum_ += total_ms;
-    total_ms_samples_.push_back(total_ms);
+    pushWindowSample(preprocess_ms_samples_, preprocess_ms, preprocess_ms_sum_);
+    pushWindowSample(inference_ms_samples_, inference_ms, inference_ms_sum_);
+    pushWindowSample(postprocess_ms_samples_, postprocess_ms, postprocess_ms_sum_);
+    pushWindowSample(total_ms_samples_, total_ms, total_ms_sum_);
 
-    if (perf_sample_count_ % 30 != 0) {
+    if (perf_sample_count_ % static_cast<size_t>(config_.performance_log_interval) != 0) {
         return;
     }
 
-    std::vector<double> sorted_total = total_ms_samples_;
+    std::vector<double> sorted_total(total_ms_samples_.begin(), total_ms_samples_.end());
     std::sort(sorted_total.begin(), sorted_total.end());
     const auto percentile = [&](double ratio) {
         const size_t index = static_cast<size_t>(std::ceil(ratio * sorted_total.size())) - 1;
         return sorted_total[std::min(index, sorted_total.size() - 1)];
     };
 
-    const double sample_count = static_cast<double>(perf_sample_count_);
+    const double window_sample_count = static_cast<double>(total_ms_samples_.size());
     std::cout << std::fixed << std::setprecision(2)
-              << "[YOLO][PERF] samples=" << perf_sample_count_
-              << " preprocess_ms=" << (preprocess_ms_sum_ / sample_count)
-              << " inference_ms=" << (inference_ms_sum_ / sample_count)
-              << " postprocess_ms=" << (postprocess_ms_sum_ / sample_count)
-              << " detect_total_ms=" << (total_ms_sum_ / sample_count)
+              << "[YOLO][PERF] total_samples=" << perf_sample_count_
+              << " window_samples=" << total_ms_samples_.size()
+              << " preprocess_ms=" << (preprocess_ms_sum_ / window_sample_count)
+              << " inference_ms=" << (inference_ms_sum_ / window_sample_count)
+              << " postprocess_ms=" << (postprocess_ms_sum_ / window_sample_count)
+              << " detect_total_ms=" << (total_ms_sum_ / window_sample_count)
               << " total_p50_ms=" << percentile(0.50)
               << " total_p95_ms=" << percentile(0.95)
               << "\n";

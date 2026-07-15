@@ -79,6 +79,9 @@ struct DetectorConfig {
     float conf_threshold = 0.25f;   // 置信度阈值。
     float nms_threshold = 0.45f;    // NMS 阈值，后续真实 YOLO 后端会用到。
     int intra_op_threads = 1;       // ORT 算子内线程数：0=默认策略，1/2...=显式线程数。
+    bool performance_logging = false; // 是否启用持续性能统计。
+    int performance_log_interval = 30; // 每隔多少个样本打印一次性能日志。
+    int performance_window_size = 120; // 性能统计滑动窗口大小。
     std::string class_file;         // 类别配置文件路径。
     std::map<int, std::string> names;               // 类别编号到类别名称的映射。
     std::map<std::string, std::string> aliases;     // 类别别名映射，例如 data_1 -> digit_1。
