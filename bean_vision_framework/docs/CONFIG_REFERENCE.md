@@ -221,6 +221,10 @@ camera:
 | `model_path` | `string` | 空 | 模型文件路径 |
 | `conf_threshold` | `float` | `0.25` | 置信度阈值 |
 | `nms_threshold` | `float` | `0.45` | NMS 阈值 |
+| `intra_op_threads` | `int` | `1` | ONNXRuntime 算子内部线程数 |
+| `performance_logging` | `bool` | `false` | 是否收集并打印 YOLO 性能统计 |
+| `performance_log_interval` | `int` | `30` | 每多少个有效检测样本打印一次性能日志 |
+| `performance_window_size` | `int` | `120` | 性能统计滑动窗口最多保留的样本数 |
 | `class_file` | `string` | 空 | 类别配置文件路径 |
 
 ### 当前真实支持情况
@@ -233,10 +237,207 @@ camera:
 - `model_path`
   - 会在 `AppConfig::load()` 中解析为相对配置文件目录的实际路径
 
+- `intra_op_threads`
+  - 由 `AppConfig.cpp` 直接解析
+  - 最终在 `BeanNumberDetector::loadModel()` 中决定是否调用 `SetIntraOpNumThreads()`
+
+- `performance_logging / performance_log_interval / performance_window_size`
+  - 由 `AppConfig.cpp` 直接解析
+  - 只影响性能诊断日志
+  - 不改变模型输入、检测结果、ROI 或业务逻辑
+
 - `class_file`
   - 用于加载：
     - `names`
     - `aliases`
+
+### 推荐 YAML 示例
+
+下面这个示例用于预览和调试阶段，方便观察线程策略与性能日志。
+
+它只是调试示例，不代表最终上车参数。
+
+```yaml
+detector:
+  backend: "onnxruntime"
+  model_path: "../bisai/bean_digit_v1_verified_20260624/best4.onnx"
+  conf_threshold: 0.25
+  nms_threshold: 0.45
+  class_file: "config/classes.yaml"
+
+  intra_op_threads: 2
+
+  performance_logging: true
+  performance_log_interval: 30
+  performance_window_size: 120
+```
+
+### `intra_op_threads` 说明
+
+#### `intra_op_threads: 1`
+
+- `ONNXRuntime` 算子内部使用 `1` 个线程
+- 是当前配置结构的保守默认值
+- `CPU` 占用相对可控
+- 推理延迟可能较高
+
+#### `intra_op_threads: 2`
+
+- `ONNXRuntime` 算子内部使用 `2` 个线程
+- 当前设备上的 preview 实测约为：
+  - `preprocess` 约 `6ms`
+  - `inference` 约 `112ms`
+  - `detect_total` 约 `118ms`
+  - 实际处理速度约 `8 ~ 9 FPS`
+- 这些数据只适用于当前 `NUC`、当前模型和当前输入尺寸
+- 不能把这组结果写成普遍性能保证
+
+#### `intra_op_threads: 0`
+
+- 代码不调用 `SetIntraOpNumThreads()`
+- 使用 `ONNXRuntime` 默认线程策略
+- 它不等于单线程
+- 可能会使用更多 `CPU` 核心
+- 可能更快，也可能增加 `CPU` 占用、温度和 `P95` 延迟波动
+
+#### 使用线程数时要注意
+
+- 线程数不是相机 `FPS`
+- 线程越多不保证推理越快
+- 最终应比较：
+  - 检测准确率
+  - 平均延迟
+  - `P95`
+  - 长期稳定性
+- 精准度优先于速度
+- 修改线程数后必须退出并重新启动程序
+- `camera_preview_demo` 中的 `r` 重载只会重新加载配置，不保证重新创建 `ONNX Session`
+- 因此 `r` 不适合用来切换线程策略
+
+### 性能日志参数说明
+
+#### `performance_logging`
+
+`performance_logging: false`
+
+- 完全关闭性能计时
+- 不保存性能样本
+- 不计算百分位数
+- 不打印性能日志
+- 不影响 `YOLO` 检测
+- 适合不需要性能诊断的运行配置
+
+`performance_logging: true`
+
+- 启用预处理、推理、后处理和总耗时统计
+- 适合 preview 和调车阶段
+- 不改变模型输入、检测结果、ROI 或业务逻辑
+
+#### `performance_log_interval`
+
+例如：
+
+```yaml
+performance_log_interval: 30
+```
+
+表示每累计 `30` 个有效检测样本打印一次。
+
+注意：
+
+- 它只控制日志打印频率
+- 不表示每 `30` 帧才推理一次
+- 不会造成跳帧
+- 值越小，日志越频繁
+- 非法值 `<= 0` 会回退到代码默认值 `30`
+
+#### `performance_window_size`
+
+例如：
+
+```yaml
+performance_window_size: 120
+```
+
+表示只保留最近 `120` 个样本计算：
+
+- 平均 `preprocess` 耗时
+- 平均 `inference` 耗时
+- 平均 `postprocess` 耗时
+- 平均 `detect_total` 耗时
+- `P50`
+- `P95`
+
+注意：
+
+- 使用固定大小滑动窗口
+- 超出窗口后会删除最旧样本
+- 内存不会无限增长
+- 值越小，对近期性能变化越敏感，但波动更大
+- 值越大，结果更稳定，但对近期变化反应更慢
+- 非法值 `<= 0` 会回退到代码默认值 `120`
+
+### YOLO 性能日志解释
+
+示例：
+
+```text
+[YOLO][PERF]
+total_samples=240
+window_samples=120
+preprocess_ms=5.99
+inference_ms=111.68
+postprocess_ms=0.04
+detect_total_ms=117.72
+total_p50_ms=116.30
+total_p95_ms=133.02
+```
+
+字段解释：
+
+- `total_samples`
+  - 进程启动后累计统计的样本数
+  - 只是计数器
+- `window_samples`
+  - 当前滑动窗口内实际保留的样本数
+- `preprocess_ms`
+  - `letterbox` 和输入张量生成耗时
+- `inference_ms`
+  - `ONNXRuntime` 推理耗时
+- `postprocess_ms`
+  - 输出解析、坐标还原和 `NMS` 耗时
+- `detect_total_ms`
+  - 整个 `detect` 调用平均耗时
+- `total_p50_ms`
+  - 最近窗口内 `50%` 的样本不超过该耗时
+- `total_p95_ms`
+  - 最近窗口内 `95%` 的样本不超过该耗时
+
+说明：
+
+- `P50` 更接近典型帧耗时
+- `P95` 更适合观察偶发卡顿和延迟波动
+- 如果 `P95` 明显高于 `P50`，通常说明存在长尾延迟
+
+### detector 调参建议
+
+| 场景 | 推荐配置 |
+|---|---|
+| 日常相机预览与性能调试 | `2` 线程，日志开启，`interval=30`，`window=120` |
+| 检查近期性能变化 | 较小窗口，例如 `60` |
+| 长时间观察稳定性 | 较大窗口，例如 `300` |
+| 不需要性能日志的运行 | `performance_logging=false` |
+| 最终上车 | 通过实际检测准确率和延迟测试后决定线程数 |
+
+比较线程策略时建议：
+
+- 使用同一个模型
+- 使用相同输入尺寸
+- 保持阈值不变
+- 每种线程策略都重新启动程序
+- 先比较检测结果是否一致
+- 再比较平均耗时和 `P95`
+- 不要为了提高 `FPS` 直接降低置信度阈值
 
 ### `classes.yaml`
 

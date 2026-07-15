@@ -13,7 +13,7 @@ camera:
   fps: 30
   exposure:
     auto: false
-    time: 20000
+    time: 15000
   gain:
     auto: false
     value: 3.0
@@ -32,13 +32,17 @@ detector:
   model_path: "../bisai/bean_digit_v1_verified_20260624/best4.onnx"
   conf_threshold: 0.25
   nms_threshold: 0.45
+  intra_op_threads: 2
+  performance_logging: true
+  performance_log_interval: 30
+  performance_window_size: 120
   class_file: "config/classes.yaml"
 
 preview:
   draw_roi: false
   yolo_enable: true
   draw_boxes: true
-  print_detections: true
+  print_detections: false
 
 debug:
   show_window: true
@@ -46,4 +50,4 @@ debug:
   save_raw_frame: false
   save_result_image: false
   show_mouse_position: true
-  output_dir: "debug_output/camera_yolo_preview"
+  output_dir: "debug_output/camera_preview"
