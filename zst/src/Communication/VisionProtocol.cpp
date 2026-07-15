@@ -7,8 +7,7 @@ uint8_t expectedDataLength(VisionMessageType type)
 {
     switch (type)
     {
-    case VisionMessageType::DigitsComplete: return 5;
-    case VisionMessageType::BeansComplete: return 3;
+    case VisionMessageType::TeamAResult: return 6;
     case VisionMessageType::BeanCode: return 1;
     case VisionMessageType::DigitLayout: return 5;
     default: return 0;
@@ -17,19 +16,15 @@ uint8_t expectedDataLength(VisionMessageType type)
 }
 
 VisionTxPacket buildWorkflowPacket(VisionMessageType type,
-                                   uint8_t sequence,
                                    const std::vector<uint8_t> &data)
 {
     const uint8_t expected = expectedDataLength(type);
     if (expected == 0 || data.size() != expected)
         throw std::invalid_argument("invalid DATA length for vision command");
-    if (sequence == 0)
-        throw std::invalid_argument("vision packet sequence must be 1..255");
 
     VisionTxPacket packet;
-    packet.command = static_cast<uint8_t>(type);            // CMD：业务消息类型
-    packet.sequence = sequence;                             // SEQ：用于匹配ACK和去重
-    packet.data = data;                                     // DATA：固定长度业务数据
+    packet.command = static_cast<uint8_t>(type); // CMD：A组0x10，B组0x20/0x21
+    packet.data = data;                          // 固定长度业务数据
     return packet;
 }
 
@@ -40,19 +35,16 @@ uint8_t visionMessageDataLength(VisionMessageType type)
 
 const char *teamModeToString(TeamMode mode)
 {
-    // 仅用于日志显示，不会把字符串发送到C板。
-    return mode == TeamMode::TeamB ? "team_b" : "team_a";  // 默认返回 team_a
+    return mode == TeamMode::TeamB ? "team_b" : "team_a";
 }
 
 const char *visionMessageTypeToString(VisionMessageType type)
 {
-    // 仅用于终端日志，线路上发送的是VisionMessageType对应的uint8_t数值。
     switch (type)
     {
-    case VisionMessageType::DigitsComplete: return "digits_complete";     // 队伍A数字阶段完成
-    case VisionMessageType::BeansComplete: return "beans_complete";       // 队伍A豆子阶段完成
-    case VisionMessageType::BeanCode: return "bean_code";                 // 队伍B单个豆子类型码
-    case VisionMessageType::DigitLayout: return "digit_layout";           // 队伍B五个箱位上的数字
-    default: return "unknown";                                            // 未知消息类型
+    case VisionMessageType::TeamAResult: return "team_a_result";
+    case VisionMessageType::BeanCode: return "bean_code";
+    case VisionMessageType::DigitLayout: return "digit_layout";
+    default: return "unknown";
     }
 }

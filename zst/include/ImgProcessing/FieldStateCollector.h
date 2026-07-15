@@ -59,7 +59,7 @@ public:
     int boxCount() const;                // 当前已保存的数字箱数量
     void reset();                        // 清空所有状态，重新开始
 
-    // 从磁盘断点恢复已经“收到电控ACK”的稳定结果。
+    // 从磁盘断点恢复已经生成并准备发送的稳定结果。
     // 函数会重新建立nextBeanIndex_、nextBoxIndex_以及豆子/数字去重表，
     // 不会恢复上次尚未完成的20帧临时投票；临时投票从0重新累计更安全。
     void restoreState(const FieldState &savedState);

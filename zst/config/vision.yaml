@@ -22,23 +22,22 @@ serial:
   simulated: true                       # true只打印不发送；接上电控实测时改为 false
   tx_log: true                          # 打印 A6...CRC 的完整十六进制发送帧
   rx_log: true                          # 打印 5A camera_state CRC 的电控接收帧
-  ack_timeout_ms: 300                   # 结果ACK超过300ms未到达时，使用同一SEQ自动重发
 
 # 两个队伍使用不同 C 板、不同时间上场，但共用视觉程序和物理串口。
-# team_a：全部数字数组 -> 全部豆子数组；不发送对应位置和最终合并帧。
+# team_a：先识别3个豆子，再识别5个数字；最终一次发送黄/绿/白豆位置和数字1/2/3位置。
 # team_b：中心第1个豆子 -> 全部数字位置数组 -> 中心剩余新豆子；豆子顺序不固定。
 workflow:
   team_mode: "team_a"                  # 只选择电脑内部流程，不作为字段发送给电控
   vote_frames_per_stage: 20            # 每个阶段累计多少帧后投票
   min_hits_per_stage: 6                # 目标至少命中多少帧才算稳定
   team_b_center_width_ratio: 0.40      # 仅B组：只接受画面横向中间40%的豆子，A组不受影响
-  resume_progress: true                # 收到结果ACK后保存断点；重启程序从下一阶段继续
+  resume_progress: true                # 结果生成并准备发送后保存断点；重启程序从下一阶段继续
   progress_file: "runtime/workflow_progress.txt" # 相对zst根目录；新比赛按R清空
 
 runtime:
   # competition：比赛模式，启动后等待电控camera_state=1才打开相机。
   # debug：日常调试模式，程序启动后直接打开相机，并忽略电控camera_state开关命令。
-  # 没接电控进行日常调试时，还应保持 serial.simulated: true，使结果自动获得模拟ACK。
+  # 没接电控进行日常调试时，保持 serial.simulated: true，只打印发送帧而不访问硬件。
   mode: "competition"
   show_window: true
   save_video: false

@@ -67,7 +67,7 @@ int main(int argc, char **argv)
 
     // 两队共用识别算法、协议编码和物理串口，只切换上层流程状态机。
     // TeamA：全部数字 -> 发送数字数组 -> 全部豆子 -> 发送豆子数组。
-    // 每次结果收到电控ACK后保存断点，程序重启后会从下一阶段继续。
+    // 每次结果生成并准备发送后保存断点，程序重启后会从下一阶段继续。
     // TeamB：中心第1个豆子 -> 全部数字place1~5 -> 中心剩余新豆子；类型顺序不固定。
     CompetitionWorkflow workflow(config.workflow);      // 创建比赛工作流
     std::cout << "[Main] 当前队伍: " << teamModeToString(config.workflow.mode)
@@ -78,7 +78,6 @@ int main(int argc, char **argv)
     std::cout << "[Main] 串口模式: " << (config.serial.simulated ? "模拟发送" : "真实串口")
               << "，端口=" << config.serial.port
               << "，波特率=" << config.serial.baudrate
-              << "，ACK超时=" << config.serial.ackTimeoutMs << "ms"
               << "，TX日志=" << (config.serial.txLog ? "开启" : "关闭")
               << "，RX日志=" << (config.serial.rxLog ? "开启" : "关闭") << std::endl;
     if (config.runMode == AppRunMode::Debug)
@@ -87,7 +86,7 @@ int main(int argc, char **argv)
                      "不等待并忽略电控camera_state开关命令"
                   << std::endl;
         if (!config.serial.simulated)
-            std::cout << "[CameraControl] 调试模式仍保留真实串口ACK通信；"
+            std::cout << "[CameraControl] 调试模式仍保留真实双向串口通信；"
                          "若没有连接电控，建议把serial.simulated改为true"
                       << std::endl;
     }
@@ -123,74 +122,31 @@ int main(int argc, char **argv)
     int consecutiveCaptureFailures = 0;
     cv::Mat lastDebugImage;                            // 相机短暂掉线时保持窗口可响应
 
-    // WaitingAck重发计时只属于当前pendingPacket。
-    // 即使电控先关闭相机，主循环也会继续监听ACK并按超时重发，不依赖相机是否开启。
-    bool pendingSendAttempted = false;
-    uint8_t trackedPendingSequence = 0;
-    std::chrono::steady_clock::time_point lastPendingSendTime{};
-
-    auto sendWorkflowResult = [&](const VisionTxPacket &packet, bool isRetry) {
-        std::cout << (isRetry ? "[WaitingAck] ACK超时，重发结果" : "[WaitingAck] 首次发送结果")
-                  << "：cmd=0x" << std::hex << std::uppercase
-                  << static_cast<int>(packet.command) << std::dec
-                  << "，seq=" << static_cast<int>(packet.sequence) << std::endl;
-
+    auto sendWorkflowResult = [&](const VisionTxPacket &packet) {
+        std::cout << "[Serial] 发送识别结果：cmd=0x" << std::hex << std::uppercase
+                  << static_cast<int>(packet.command) << std::dec << std::endl;
         const bool written = serial.sendPacket(packet);
-        // 无论本次write是否成功，都从现在开始等待一个重发间隔，避免串口异常时每帧刷屏。
-        pendingSendAttempted = true;
-        trackedPendingSequence = packet.sequence;
-        lastPendingSendTime = std::chrono::steady_clock::now();
         if (!written)
-            std::cerr << "[WaitingAck] 本次写串口失败，保留原结果，稍后使用同一SEQ重发"
+            std::cerr << "[Serial] 本次识别结果发送失败；无ACK模式不会自动重发"
                       << std::endl;
-
-        if (config.serial.simulated && written)
-        {
-            // 模拟模式没有真实C板回传ACK。为了让离线算法调试仍能完整跑完A/B状态机，
-            // 在模拟发送成功后立即注入一个STATUS=0的本地ACK；真实模式绝不会走这里。
-            std::cout << "[WaitingAck] 模拟模式自动生成ACK" << std::endl;
-            if (workflow.confirmPacketAcknowledged(packet.sequence,
-                                                   packet.command,
-                                                   static_cast<uint8_t>(ResultAckStatus::Ok)))
-            {
-                pendingSendAttempted = false;
-                trackedPendingSequence = 0;
-            }
-        }
         return written;
     };
 
     while (true)
     {
-        // 4. 先处理电控->视觉的全部串口事件，再决定本轮是否取图。
-        // receiveEvent()为非阻塞函数，可从同一字节流中解析4字节相机控制帧和7字节ACK帧。
-        // while用于一次处理内核缓冲区中已经积压的多条完整消息。
-        SerialRxEvent rxEvent;
-        while (serial.receiveEvent(rxEvent))
+        // 4. 先处理电控->视觉的4字节相机控制帧，再决定本轮是否取图。
+        // receiveCameraState()非阻塞，可处理半帧、粘包和线路噪声。
+        uint8_t requestedCameraState = 0;
+        while (serial.receiveCameraState(requestedCameraState))
         {
-            if (rxEvent.type == SerialRxEventType::ResultAck)
-            {
-                // 只有SEQ、原CMD、STATUS全部正确，工作流才推进阶段并保存断点。
-                if (workflow.confirmPacketAcknowledged(rxEvent.sequence,
-                                                       rxEvent.originalCommand,
-                                                       rxEvent.status))
-                {
-                    pendingSendAttempted = false;
-                    trackedPendingSequence = 0;
-                }
-                continue;
-            }
-
             // 调试模式的相机始终由本机配置控制，不允许偶然收到的0将相机关闭。
-            // ACK消息已在上面的分支正常处理，所以这里仅忽略camera_state控制帧。
             if (config.runMode == AppRunMode::Debug)
             {
                 std::cout << "[CameraControl] debug模式忽略电控camera_state="
-                          << static_cast<int>(rxEvent.cameraState) << std::endl;
+                          << static_cast<int>(requestedCameraState) << std::endl;
                 continue;
             }
 
-            const uint8_t requestedCameraState = rxEvent.cameraState;
             const bool requestedEnabled = requestedCameraState == 1;
             if (requestedEnabled == cameraEnabled) continue; // 重复命令无需反复开关SDK
 
@@ -198,7 +154,7 @@ int main(int argc, char **argv)
             if (!cameraEnabled)
             {
                 // 只关闭相机SDK，不退出程序、不关闭串口，也不清空A/B识别和断点数据。
-                // 因此A组发完数字后收到0，之后再收到1仍会直接进入豆子阶段。
+                // 因此A组识别完豆子后收到0，之后再收到1仍会直接进入数字阶段。
                 if (cameraIsOpen) camera.close();
                 cameraIsOpen = false;
                 consecutiveCaptureFailures = 0;
@@ -211,27 +167,6 @@ int main(int argc, char **argv)
                 // 本轮下面的统一重连分支会执行camera.open()。
                 std::cout << "[CameraControl] 收到camera_state=1，准备打开相机" << std::endl;
             }
-        }
-
-        // 工作流存在待确认结果时，ACK超时后原样重发。
-        // 这里位于cameraEnabled判断之前，因此相机关闭期间也不会停止ACK可靠传输。
-        const VisionTxPacket *pending = workflow.pendingPacket();
-        if (pending == nullptr)
-        {
-            pendingSendAttempted = false;
-            trackedPendingSequence = 0;
-        }
-        else
-        {
-            // 新pending使用了不同SEQ，说明这是刚生成的另一条业务结果，重新开始计时。
-            if (trackedPendingSequence != pending->sequence)
-                pendingSendAttempted = false;
-
-            const auto now = std::chrono::steady_clock::now();
-            const bool timedOut = pendingSendAttempted &&
-                now - lastPendingSendTime >=
-                    std::chrono::milliseconds(config.serial.ackTimeoutMs);
-            if (timedOut) sendWorkflowResult(*pending, true);
         }
 
         // 电控要求关闭相机时，不能调用camera.read()，否则SDK会持续报取帧失败并触发看门狗。
@@ -319,15 +254,14 @@ int main(int argc, char **argv)
 
         // 7. 当前队伍工作流决定"这一帧是否产生阶段消息"。
         // update只处理识别顺序和生成消息，不直接操作串口，因此TeamA/B流程可以独立测试。
-        // 视觉结果生成后工作流进入WaitingAck；在收到匹配ACK之前，update不再累计下一阶段。
+        // 无ACK模式下，结果生成后工作流立即进入下一阶段，并只发送一次。
         // imageWidth用于B组选择最靠近画面中心的豆子；A组仍按原来的从左到右规则。
         const std::vector<VisionTxPacket> packets =
             workflow.update(result.detections, frame.cols); // 工作流更新
         for (const VisionTxPacket &tx : packets)
         {
-            // 当前每个阶段最多产生一条结果。首次发送后保持原包，ACK丢失时使用同一SEQ重发。
-            // 此处绝不推进阶段、绝不保存断点；这两件事只由正确ACK触发。
-            sendWorkflowResult(tx, false);
+            // 当前每个阶段最多产生一条结果，直接通过串口发送，不等待电控确认。
+            sendWorkflowResult(tx);
         }
 
         // 保存最近一张识别结果图。相机短暂掉线时继续显示该图并处理退出按键。

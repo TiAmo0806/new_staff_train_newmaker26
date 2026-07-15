@@ -58,21 +58,13 @@ bool VirtualSerial::isOpen() const
 
 bool VirtualSerial::sendPacket(const VisionTxPacket &packet, int maxRetries)
 {
-    // 最简可靠协议：A6 + CMD + SEQ + 固定长度DATA + CRC16。
-    // SEQ=0被保留为无效值，防止未初始化的数据包在线路上被电控接受。
-    if (packet.sequence == 0)
-    {
-        std::cerr << "[Serial] 发送失败：结果包SEQ不能为0" << std::endl;
-        return false;
-    }
-
+    // 无ACK简化协议：A6 + CMD + 固定长度DATA + CRC16。
     std::vector<uint8_t> frame;
-    frame.reserve(packet.data.size() + 5);                      // A6+CMD+SEQ+DATA+CRC16
+    frame.reserve(packet.data.size() + 4);                      // A6+CMD+DATA+CRC16
     frame.push_back(FRAME_HEADER);                              // [0] 帧头 0xA6
     frame.push_back(packet.command);                            // [1] 业务CMD
-    frame.push_back(packet.sequence);                           // [2] 结果SEQ
-    frame.insert(frame.end(), packet.data.begin(), packet.data.end()); // [3..] DATA
-    // 先预留两个CRC字节；Append()会基于前面的帧头、CMD、SEQ和DATA计算并覆盖它们。
+    frame.insert(frame.end(), packet.data.begin(), packet.data.end()); // [2..] DATA
+    // 先预留两个CRC字节；Append()基于帧头、CMD和DATA计算并覆盖它们。
     frame.push_back(0);                                         // CRC 低字节占位
     frame.push_back(0);                                         // CRC 高字节占位
     crc16::Append(frame.data(), static_cast<int>(frame.size())); // 计算并填入 CRC
@@ -119,10 +111,10 @@ bool VirtualSerial::sendPacket(const VisionTxPacket &packet, int maxRetries)
     return sent;
 }
 
-bool VirtualSerial::receiveEvent(SerialRxEvent &event)
+bool VirtualSerial::receiveCameraState(uint8_t &cameraState)
 {
     // 模拟模式没有真实电控输入，直接返回“当前没有新事件”。
-    // 当前main启动时相机默认关闭，因此联调ACK和相机开关必须使用真实串口模式。
+    // 比赛模式联调电控相机开关时必须使用真实串口模式。
     if (config_.simulated) return false;
 
     // 如果串口启动时未连接，或运行中读串口出错被关闭，则按1秒间隔自动重连。
@@ -179,41 +171,23 @@ bool VirtualSerial::receiveEvent(SerialRxEvent &event)
         }
         receiveBuffer_.erase(receiveBuffer_.begin(), header);
 
-        // 至少收到帧头和第二字节后，才能判断这是4字节相机控制帧还是7字节ACK帧。
+        // 当前电控->视觉只保留4字节相机控制帧，第二字节只能是0或1。
         if (receiveBuffer_.size() < 2) return false;
-
-        const uint8_t commandOrState = receiveBuffer_[1];
-        size_t frameSize = 0;
-        SerialRxEventType eventType = SerialRxEventType::CameraState;
-        if (commandOrState <= 1)
+        if (receiveBuffer_[1] > 1)
         {
-            // 保持兼容原有相机控制协议：[5A][camera_state][CRC_L][CRC_H]。
-            frameSize = CAMERA_CONTROL_FRAME_SIZE;
-            eventType = SerialRxEventType::CameraState;
-        }
-        else if (commandOrState == RESULT_ACK_COMMAND)
-        {
-            // 结果确认协议：[5A][80][SEQ][原CMD][STATUS][CRC_L][CRC_H]。
-            frameSize = RESULT_ACK_FRAME_SIZE;
-            eventType = SerialRxEventType::ResultAck;
-        }
-        else
-        {
-            // 未知第二字节不可能构成当前协议帧。只丢弃本次0x5A，继续寻找后续帧头。
-            std::cerr << "[Serial] RX未知命令/状态=0x" << std::hex << std::uppercase
-                      << static_cast<int>(commandOrState) << std::dec
+            std::cerr << "[Serial] RX非法camera_state=0x" << std::hex << std::uppercase
+                      << static_cast<int>(receiveBuffer_[1]) << std::dec
                       << "，丢弃当前帧头" << std::endl;
             receiveBuffer_.erase(receiveBuffer_.begin());
             continue;
         }
 
-        // 已识别帧类型，但当前字节尚未收全；保留半帧等待下一次调用继续读取。
-        if (receiveBuffer_.size() < frameSize) return false;
+        if (receiveBuffer_.size() < CAMERA_CONTROL_FRAME_SIZE) return false;
 
-        // 两种接收帧都使用相同CRC算法，并按低字节、高字节放在线路末尾。
-        if (!crc16::Verify(receiveBuffer_.data(), static_cast<int>(frameSize)))
+        if (!crc16::Verify(receiveBuffer_.data(),
+                           static_cast<int>(CAMERA_CONTROL_FRAME_SIZE)))
         {
-            std::cerr << "[Serial] RX帧CRC错误，丢弃当前0x5A并继续找下一帧"
+            std::cerr << "[Serial] RX相机控制帧CRC错误，丢弃当前0x5A并继续找下一帧"
                       << std::endl;
             receiveBuffer_.erase(receiveBuffer_.begin());   // 只丢帧头，尽量保留后续有效数据
             continue;
@@ -221,51 +195,19 @@ bool VirtualSerial::receiveEvent(SerialRxEvent &event)
 
         if (config_.rxLog)
         {
-            std::cout << (eventType == SerialRxEventType::CameraState
-                              ? "[Serial] RX CAMERA"
-                              : "[Serial] RX ACK");
-            for (size_t i = 0; i < frameSize; ++i)
+            std::cout << "[Serial] RX CAMERA";
+            for (size_t i = 0; i < CAMERA_CONTROL_FRAME_SIZE; ++i)
                 std::cout << " " << std::hex << std::uppercase << std::setw(2)
                           << std::setfill('0') << static_cast<int>(receiveBuffer_[i]);
-            std::cout << std::dec;
-            if (eventType == SerialRxEventType::CameraState)
-                std::cout << "，camera_state=" << static_cast<int>(receiveBuffer_[1]);
-            else
-                std::cout << "，seq=" << static_cast<int>(receiveBuffer_[2])
-                          << "，original_cmd=0x" << std::hex << std::uppercase
-                          << static_cast<int>(receiveBuffer_[3]) << std::dec
-                          << "，status=" << static_cast<int>(receiveBuffer_[4]);
-            std::cout << std::endl;
+            std::cout << std::dec
+                      << "，camera_state=" << static_cast<int>(receiveBuffer_[1])
+                      << std::endl;
         }
 
-        // 当前完整帧已经消费。若一次read收到了多帧，其余字节留给下一次调用解析。
-        std::vector<uint8_t> parsedFrame(receiveBuffer_.begin(),
-                                         receiveBuffer_.begin() +
-                                             static_cast<std::ptrdiff_t>(frameSize));
+        cameraState = receiveBuffer_[1];
         receiveBuffer_.erase(receiveBuffer_.begin(),
-                             receiveBuffer_.begin() +
-                                 static_cast<std::ptrdiff_t>(frameSize));
-
-        if (eventType == SerialRxEventType::CameraState)
-        {
-            event = SerialRxEvent{};
-            event.type = SerialRxEventType::CameraState;
-            event.cameraState = parsedFrame[1];
-            return true;
-        }
-
-        // ACK的SEQ=0无效。CRC正确也不能接受无效SEQ，否则可能误确认未初始化的数据包。
-        if (parsedFrame[2] == 0)
-        {
-            std::cerr << "[Serial] RX ACK的SEQ为0，本帧已忽略" << std::endl;
-            continue;
-        }
-
-        event = SerialRxEvent{};
-        event.type = SerialRxEventType::ResultAck;
-        event.sequence = parsedFrame[2];
-        event.originalCommand = parsedFrame[3];
-        event.status = parsedFrame[4];
+                              receiveBuffer_.begin() +
+                                  static_cast<std::ptrdiff_t>(CAMERA_CONTROL_FRAME_SIZE));
         return true;
     }
 }
