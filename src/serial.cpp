@@ -119,30 +119,27 @@ bool SerialPort::send(const uint8_t* data, size_t len) {
     return true;
 }
 
-//  数据包发送（重试 + 重连 + TX 日志）
+//  TX 调试日志（十六进制 hexdump），由调用方在 transmit 前单独调用
+void SerialPort::logTxData(const std::vector<uint8_t>& data) const {
+    if (!txLogEnabled_) return;
+
+    std::cout << "[SerialPort] TX ("
+              << data.size() << "B): ";
+    std::ios oldState(nullptr);
+    oldState.copyfmt(std::cout);
+    for (size_t i = 0; i < data.size(); ++i)
+        std::cout << std::uppercase << std::hex << std::setw(2)
+                  << std::setfill('0')
+                  << static_cast<int>(data[i])
+                  << (i < data.size() - 1 ? " " : "");
+    std::cout.copyfmt(oldState);
+    std::cout << std::dec << std::endl;
+}
+
+//  数据包发送（重试 + 重连）
 bool SerialPort::transmit(const std::vector<uint8_t>& data,
                             int maxRetries) {
-    // 1. TX 调试日志
-    if (txLogEnabled_) {
-        std::cout << "[SerialPort] TX ("
-                  << data.size() << "B): ";
-        //清晰的模块标签，包含这条日志来自哪个模块（SerialPort），以及方向是发送（TX，Transmit）。
-        std::ios oldState(nullptr);
-        oldState.copyfmt(std::cout);
-        /*                                                                
-        把 std::cout 当前的所有格式设置（如数字进制、宽度、填充字符、大小写等）完整复制一份到 oldState 里                                          
-        用于使用std::hex（十六进制）和 std::setw（宽度）来格式化输出之后复原格式                                                                  
-        */
-        for (size_t i = 0; i < data.size(); ++i)
-            std::cout << std::uppercase << std::hex << std::setw(2)
-                      << std::setfill('0')
-                      << static_cast<int>(data[i])
-                      << (i < data.size() - 1 ? " " : "");
-        std::cout.copyfmt(oldState);//恢复流格式
-        std::cout << std::dec << std::endl;
-    }
-
-    // 2. 发送 + 重试
+    // 1. 发送 + 重试
     for (int retry = 0; retry < maxRetries; ++retry) {
         if (send(data.data(), data.size())) {
             reconnectFailCount_ = 0;   // 发送成功，清零失败计数
@@ -155,10 +152,9 @@ bool SerialPort::transmit(const std::vector<uint8_t>& data,
     std::cerr << "[SerialPort] Error: 发送失败 (" << maxRetries
               << " 次重试)" << std::endl;
 
-    // 3. 自动重连（带冷却 + 最大次数保护）
     if (!autoReconnect_) return false;
 
-    // 3a. 冷却检查：两次重连之间至少间隔 reconnectCooldownMs_
+    // 2a. 冷却检查：两次重连之间至少间隔 reconnectCooldownMs_
     auto now = std::chrono::steady_clock::now();
     if (lastReconnectAttempt_.time_since_epoch().count() > 0) {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -169,7 +165,7 @@ bool SerialPort::transmit(const std::vector<uint8_t>& data,
         }
     }
 
-    // 3b. 上限检查：连续失败超过 maxReconnectAttempts_ 次，进入降级模式
+    // 2b. 上限检查：连续失败超过 maxReconnectAttempts_ 次，进入降级模式
     if (reconnectFailCount_ >= maxReconnectAttempts_) {
         std::cerr << "[SerialPort] 连续重连失败 " << reconnectFailCount_
                   << " 次（上限 " << maxReconnectAttempts_
@@ -178,7 +174,7 @@ bool SerialPort::transmit(const std::vector<uint8_t>& data,
         return false;
     }
 
-    // 3c. 执行重连
+    // 2c. 执行重连
     lastReconnectAttempt_ = now;
     if (tryReconnect()) {
         std::cout << "[SerialPort] 重连成功，重试发送..." << std::endl;

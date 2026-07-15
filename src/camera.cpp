@@ -89,8 +89,24 @@ bool Camera::open(int width, int height, double exposureTime, int analogGain)
     analogGain_   = analogGain;
     if (exposureTime > 0) {
         CameraSetAeState(hCamera_, FALSE);               // 关闭自动曝光
-        CameraSetExposureTime(hCamera_, exposureTime);   // 手动曝光时间(微秒)
-        std::cout << "手动曝光: " << exposureTime << " us" << std::endl;
+
+        // 查询曝光时间范围（防止超出帧周期导致行数溢出）
+        double expMin = 0, expMax = 0, expStep = 0;
+        CameraGetExposureTimeRange(hCamera_, &expMin, &expMax, &expStep);
+        double clampedExp = exposureTime;
+        if (clampedExp > expMax) {
+            std::cerr << "警告: 曝光 " << exposureTime
+                      << " us 超出上限 " << expMax << " us，已自动修正" << std::endl;
+            clampedExp = expMax;
+        }
+        if (clampedExp < expMin) clampedExp = expMin;
+
+        CameraSetExposureTime(hCamera_, clampedExp);
+        double actualExp = 0;
+        CameraGetExposureTime(hCamera_, &actualExp);
+        std::cout << "手动曝光: " << actualExp << " us"
+                  << " (范围 " << expMin << "~" << expMax << " us, 步进 "
+                  << expStep << " us)" << std::endl;
     }
     if (analogGain > 0) {
         CameraSetAnalogGain(hCamera_, analogGain);       // 模拟增益

@@ -135,12 +135,14 @@ white_kidney_bean 2 3 60
 
 ### 预处理（`datection.cpp`）
 
-```
 原图 → CLAHE 直方图均衡化（Lab色彩空间，仅L通道） → Letterbox → RGB → 归一化 → NCHW blob
-```
 
-- **CLAHE**：`clipLimit=2.0, tileGridSize=8x8`，增强光照鲁棒性
-- **Letterbox**：等比例缩放 + 灰边填充到 640x640，记录 `scale/dw/dh` 用于坐标还原
+| 函数 | 说明 |
+|------|------|
+| `applyCLAHE` | [classes+4, anchors] 格式 |
+| `parseYOLOv8OutputAnchorFirst` | [anchors, classes+4] 格式|
+| `applyNMS` | 按置信度排序 → IoU 过滤 → 去重 |
+| `getOutputInfo` | 从输出 shape 自动推断 `numClasses` 和 `numAnchors` |
 
 ### 后处理（`datection.cpp`）
 
@@ -203,35 +205,45 @@ struct VisionSendPacket {
 | `open("/dev/gimbal")` | 打开串口，调用configurePort进行配置，tcflush清理垃圾数据 |
 | `configurePort()` | 调用termios结构体配置模式，tcsetattr(fd_, TCSANOW, &tty)将模式配置到fd对应的串口|
 | `send(data, len)` | 使用write写入字节data之后len长度的内容到串口 |
-| `sendPacket()` | 集合重试，重连，TX日志|
-| `tryReconnect` | 打开串口，配置 115200 8N1 原始模式 |
-| `close` | 写入字节到串口 |
-| `isOpen()` | 关闭串口 |
+| `transmit` | 重试，重连，满足条件执行发送返回true直接结束函数|
+| `tryReconnect` | 关闭串口，睡眠，打开串口 |
+| `close` | 关闭串口 |
+| `isOpen()` | return fd_>=0 |
+
+| 成员 | 功能 |
+|------|------|
+| `int fd_` | 文件描述符，操作系统内核用来标识“打开的文件/设备”的一串数字编号 |
+| `std::string portName_` | 设备路径 |
+| `bool txLogEnabled_` | 是否打印日志 |
+| `bool autoReconnect_ ` | 是否自动重连 |
+| `std::chrono::steady_clock::time_point lastReconnectAttempt_{}` | 最后一次重连的时间 |
+| `int  reconnectFailCount_` | 重连失败次数，失败一次加一 |
+| `int  reconnectCooldownMs_` | 重连冷却时间，由yaml设置 |
+| `int  maxReconnectAttempts_` | 最大重连次数，有yaml设置 |
 
 ### CRC16.hpp —— 校验
-
+constexpr uint16_t CRC16_INIT = 0xFFFF;
 | 函数 | 功能 |
 |------|------|
-| `Append_CRC16_Check_Sum(buf, len)` | 计算 CRC 填入末尾两字节 |
-| `Verify_CRC16_Check_Sum(buf, len)` | 验证数据完整性 |
+| `Get_CRC16_Check_Sum` | 位运算，查表 |
+| `Append_CRC16_Check_Sum(buf, len)` | 调用Get_CRC16_Check_Sum计算 CRC 填入末尾两字节 |
+| `Verify_CRC16_Check_Sum(buf, len)` | 重新计算 CRC 并与包尾比对，验证完整性 |
 
 ---
 
 ## 可视化（`visualizer.cpp`）
+
+| 函数 | 功能 |
+|------|------|
+| `buildColorTable` | 颜色表，类别比例*180，颜色在hsv空间均匀分布 |
+| `initDebugWindow` | 可视化窗口并修改初始大小 |
+| `drawDebug` |  |
 
 `drawDebug()` 在帧上叠加三层信息：
 
 1. **检测框**：矩形 + 标签（类别名、置信度、坐标尺寸），颜色按类别编码
 2. **四角标记**：红色圆点，确认画面正常渲染
 3. **状态栏**：YOLO/串口灯号、FPS、跟踪状态（stable counter/cool down）、检测数量
-
----
-## 工具函数（`utils.hpp` ）
-
-| 方法 | 功能 |
-|------|------|
-| `safeLastWriteTime` | 工具函数，使用last_write_time获取文件修改时间，文件不存在返回零值 |
-| `resolveProjectPath` | 工具函数，fs::exists遍历搜索路径 |
 
 ---
 

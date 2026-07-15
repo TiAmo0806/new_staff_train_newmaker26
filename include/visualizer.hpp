@@ -14,6 +14,18 @@
 #include "stable_tracker.hpp"
 
 /**
+ * @brief 生成类别颜色表（HSV 色相均匀分布）
+ * @param numClasses 类别数量
+ * @return 每个类别对应的 BGR 颜色
+ */
+std::vector<cv::Scalar> buildColorTable(int numClasses);
+
+/**
+ * @brief 初始化调试窗口（在主循环之前调用一次，创建可拖动调节大小的窗口）
+ */
+void initDebugWindow();
+
+/**
  * @brief 在帧上绘制调试信息（检测框 + 状态栏 + FPS）
  * @param frame     输入/输出图像
  * @param dets      当前帧的检测结果
@@ -24,13 +36,6 @@
  * @param serialOk  串口是否正常
  * @param fps       当前帧率
  */
-/**
- * @brief 生成类别颜色表（HSV 色相均匀分布）
- * @param numClasses 类别数量
- * @return 每个类别对应的 BGR 颜色
- */
-std::vector<cv::Scalar> buildColorTable(int numClasses);
-
 void drawDebug(cv::Mat& frame,
                const std::vector<Detection>& dets,
                const StableTracker& tracker,

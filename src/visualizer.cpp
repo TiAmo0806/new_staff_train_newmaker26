@@ -22,6 +22,13 @@ std::vector<cv::Scalar> buildColorTable(int numClasses)
     return colors;
 }
 
+void initDebugWindow()
+{
+    cv::namedWindow("NUC Vision — Debug", cv::WINDOW_NORMAL);
+    // 初始设为 960x540，比原图小，确保放大缩小都能拖
+    cv::resizeWindow("NUC Vision — Debug", 960, 540);
+}
+
 void drawDebug(cv::Mat& frame,
                const std::vector<Detection>& dets,
                const StableTracker& tracker,
@@ -31,6 +38,7 @@ void drawDebug(cv::Mat& frame,
 {
     // ── 检测框 ──
     for (const auto& d : dets) {
+        //防止出现class_name>8的情况，有效防止越界
         cv::Scalar color = colors[d.class_id % colors.size()];
         int thick = std::max(3, cfg.line_thickness);
         cv::rectangle(frame, d.bbox, color, thick);
@@ -75,6 +83,7 @@ void drawDebug(cv::Mat& frame,
     std::string yoloIcon = modelOk  ? "🟢 YOLO" : "🔴 YOLO(off)";
     std::string serIcon  = serialOk ? "🟢 串口"  : "🔴 串口(off)";
     char buf[128];
+    //安全地格式化字符串，防止溢出。
     snprintf(buf, sizeof(buf), "%s  %s  FPS:%.1f", yoloIcon.c_str(), serIcon.c_str(), fps);
     cv::putText(frame, buf, cv::Point(8, y),
                 cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(200, 200, 200), 1);
@@ -96,4 +105,8 @@ void drawDebug(cv::Mat& frame,
                 cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(180, 180, 180), 1);
 
     cv::imshow("NUC Vision — Debug", frame);
+
+    // 每帧强制关闭 AUTOSIZE，防止 imshow 把窗口重置为不可调节
+    cv::setWindowProperty("NUC Vision — Debug",
+                          cv::WND_PROP_AUTOSIZE, 0);
 }

@@ -8,7 +8,53 @@
 #include <algorithm>
 #include <iostream>
 
-//  1. 预处理函数（letterbox）
+//  1a. CLAHE 直方图均衡化（增强光照鲁棒性）
+cv::Mat applyCLAHE(const cv::Mat& bgr)
+{
+    cv::Mat lab;
+    /*
+    L（亮度）：从黑到白，0~100。
+    a（绿色→红色）：负值偏绿，正值偏红。
+    b（蓝色→黄色）：负值偏蓝，正值偏黄。
+    */
+    cv::cvtColor(bgr, lab, cv::COLOR_BGR2Lab);
+    std::vector<cv::Mat> lab_channels;
+    cv::split(lab, lab_channels);
+    auto clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
+    /*
+    cv::createCLAHE：OpenCV 提供的工厂函数，创建一个 CLAHE 算法的”处理器”对象。
+    参数 1 2.0：剪裁限制（clipLimit）。这是 CLAHE 最重要的参数！它控制”对比度增强的强度”。
+    CLAHE 会把图像的直方图（亮度分布）切成许多小格子，在每个格子里把亮度分布”拉平”以增强对比度。
+    clipLimit 限制每个灰度级最多被”拉高”多少倍。值越大，增强越剧烈，但也会放大噪声。
+    2.0 是一个温和的工业值（适合嵌入式设备），如果需要更强，可以提到 3.0；如果图像已经比较亮，可以降到 1.5。
+    参数 2 cv::Size(8, 8)：网格大小（tileGridSize）。CLAHE 会把图像分成 8×8 的小块，
+    在每个小块里分别做直方图均衡化，然后平滑拼接。
+    网格越细（比如 4×4），局部对比度增强越强，但计算量更大，且可能产生块状伪影。
+    8×8 是 OpenCV 官方推荐的平衡值（计算快、效果均匀）。
+    */
+    clahe->apply(lab_channels[0], lab_channels[0]);  // 只均衡 L（亮度）通道
+    cv::merge(lab_channels, lab);
+    cv::Mat equalized;
+    cv::cvtColor(lab, equalized, cv::COLOR_Lab2BGR);
+    return equalized;
+}
+
+//  1b. letterbox 缩放 + 灰边填充
+cv::Mat applyLetterbox(const cv::Mat& bgr, int new_w, int new_h,
+                       int dw, int dh, int input_w, int input_h)
+{
+    cv::Mat resized;
+    cv::resize(bgr, resized, cv::Size(new_w, new_h));
+
+    // 创建填充图像（BGR 填充 114,114,114，YOLO 标准）
+    cv::Mat padded(input_h, input_w, CV_8UC3, cv::Scalar(114, 114, 114));
+    // 114是 YOLO 官方在 COCO 数据集上统计出的图像平均背景色。用灰色填充，比用纯黑（0）填充，对神经网络推理的干扰更小。
+    resized.copyTo(padded(cv::Rect(dw, dh, new_w, new_h)));
+    //在padded上划出一块roi区域，把图片拷贝到roi上
+    return padded;
+}
+
+//  1. 预处理函数（组合调用：letterbox参数计算 → CLAHE → letterbox → blob）
 cv::Mat preprocess(
     const cv::Mat& image,
     int& dw,
@@ -31,44 +77,12 @@ cv::Mat preprocess(
     r：缩比率。比如原图是 1920x1080，要缩到 640x640。宽要缩 640/1920=0.33，高要缩 640/1080=0.59，取最小的 0.33。防止图片变形，如果取大的，图片会超出画布被裁掉。
     new_w, new_h：按 0.33 缩放后的实际尺寸（633x356）。
     dw, dh：左右上下的灰边宽度。(640 - 633)/2 = 3，(640 - 356)/2 = 142。
-    scale：“还原放大镜”。因为模型输出的是 640x640 画布里的坐标，要还原成 1920x1080 原图坐标，需要除以 r，也就是乘以 1/r。这是后面解码的关键钥匙。
+    scale：”还原放大镜”。因为模型输出的是 640x640 画布里的坐标，要还原成 1920x1080 原图坐标，需要除以 r，也就是乘以 1/r。这是后面解码的关键钥匙。
     */
 
-    // ---- CLAHE 直方图均衡化（增强光照鲁棒性）----
-    cv::Mat lab;
-    /*
-    L（亮度）：从黑到白，0~100。
-    a（绿色→红色）：负值偏绿，正值偏红。
-    b（蓝色→黄色）：负值偏蓝，正值偏黄。
-    */
-    cv::cvtColor(image, lab, cv::COLOR_BGR2Lab);
-    std::vector<cv::Mat> lab_channels;
-    cv::split(lab, lab_channels);
-    auto clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
-    /*
-    cv::createCLAHE：OpenCV 提供的工厂函数，创建一个 CLAHE 算法的“处理器”对象。
-    参数 1 2.0：剪裁限制（clipLimit）。这是 CLAHE 最重要的参数！它控制“对比度增强的强度”。
-    CLAHE 会把图像的直方图（亮度分布）切成许多小格子，在每个格子里把亮度分布“拉平”以增强对比度。
-    clipLimit 限制每个灰度级最多被“拉高”多少倍。值越大，增强越剧烈，但也会放大噪声。
-    2.0 是一个温和的工业值（适合嵌入式设备），如果需要更强，可以提到 3.0；如果图像已经比较亮，可以降到 1.5。
-    参数 2 cv::Size(8, 8)：网格大小（tileGridSize）。CLAHE 会把图像分成 8×8 的小块，
-    在每个小块里分别做直方图均衡化，然后平滑拼接。
-    网格越细（比如 4×4），局部对比度增强越强，但计算量更大，且可能产生块状伪影。
-    8×8 是 OpenCV 官方推荐的平衡值（计算快、效果均匀）。
-    */
-    clahe->apply(lab_channels[0], lab_channels[0]);  // 只均衡 L（亮度）通道
-    cv::merge(lab_channels, lab);
-    cv::Mat equalized;
-    cv::cvtColor(lab, equalized, cv::COLOR_Lab2BGR);
+    cv::Mat enhanced = applyCLAHE(image);
+    cv::Mat padded   = applyLetterbox(enhanced, new_w, new_h, dw, dh, input_w, input_h);
 
-    cv::Mat resized;
-    cv::resize(equalized, resized, cv::Size(new_w, new_h));
-
-    // 创建填充图像（BGR 填充 114,114,114，YOLO 标准）
-    cv::Mat padded(input_h, input_w, CV_8UC3, cv::Scalar(114, 114, 114));
-    // 114是 YOLO 官方在 COCO 数据集上统计出的图像平均背景色。用灰色填充，比用纯黑（0）填充，对神经网络推理的干扰更小。
-    resized.copyTo(padded(cv::Rect(dw, dh, new_w, new_h)));
-    //在padded上划出一块roi区域，把图片拷贝到roi上
     // 转换为 RGB 并归一化到 0~1
     cv::Mat rgb;
     cv::cvtColor(padded, rgb, cv::COLOR_BGR2RGB);

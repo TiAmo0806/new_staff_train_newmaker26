@@ -2,14 +2,14 @@
 # 修改后自动生效，无需重新编译
 
 model:
-  model_path: "last4.onnx"        # 模型文件路径
+  model_path: "best4.onnx"        # 模型文件路径
 
 detection:
-  confidence_threshold: 0.5
+  confidence_threshold: 0.3
   nms_threshold: 0.25
   input_width: 640
   input_height: 640
-  used_classes: 8       # 只使用前N类（-1=全部）
+  used_classes: -1      # 只使用前N类（-1=全部）
 
 display:
   font_scale: 0.6
@@ -17,8 +17,8 @@ display:
   line_thickness: 2
 
 camera:
-  exposure_time: 15000             # 手动曝光时间(微秒)，-1=自动曝光
-  analog_gain: -1               # 模拟增益，-1=自动
+  exposure_time: 40000            # 手动曝光时间(微秒)，-1=自动曝光
+  analog_gain: 8             # 手动增益（关AE后必须手动设gain，否则gain会掉底）
   reconnect_threshold: 50      # 连续空帧阈值（达到后触发重连）
   reconnect_delay_ms: 500      # 重连前等待时间(ms)，给驱动释放资源的时间
 

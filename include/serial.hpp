@@ -24,6 +24,9 @@ public:
     /// 调试：开关 TX 日志（默认开）
     void setTxLogEnabled(bool enabled) { txLogEnabled_ = enabled; }
 
+    /// TX 调试日志（十六进制 hexdump），由调用方在 transmit 前单独调用
+    void logTxData(const std::vector<uint8_t>& data) const;
+
     /// 自动重连（默认开）
     void setAutoReconnect(bool enabled) { autoReconnect_ = enabled; }
 

@@ -152,7 +152,8 @@ static void sendCommand(const std::string& targetName,
     auto data   = path_serial_driver::pack(packet);   // CRC16 + 序列化
 
     if (serialOk) {
-        serial.transmit(data);   // 重试 + 重连 + 日志 由 serial 内部处理
+        serial.logTxData(data);
+        serial.transmit(data);   // 重试 + 重连
         return;
     }
 
@@ -312,6 +313,9 @@ int main()
 
     SerialPort serial;
     bool serialOk = initSerial(serial, "/dev/gimbal", cfg);
+
+    // 初始化调试窗口（在主循环前创建，保证 WINDOW_NORMAL 生效）
+    initDebugWindow();
 
     // 进入主循环（所有权移交）
     runLoop(cam, detector, serial,
