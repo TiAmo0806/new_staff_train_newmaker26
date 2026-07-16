@@ -103,6 +103,8 @@ FieldStateCollector CompetitionWorkflow::makeCollector() const
     FieldStateCollectorConfig collectorConfig;
     collectorConfig.voteFramesPerAngle = std::max(1, config_.voteFramesPerStage);   // 至少 1 帧
     collectorConfig.minHitsPerAngle = std::max(1, config_.minHitsPerStage);         // 至少 1 次
+    collectorConfig.minNewDigitsPerCommit =
+        std::clamp(config_.digitsPerView, 1, 5);              // A/B共用：每个角度整批保存数字的门槛
     collectorConfig.maxNewBeansPerCommit =
         config_.mode == TeamMode::TeamB ? 1 : 3;            // TeamB 每次最多新增 1 个豆子
     collectorConfig.selectMostFrequentBeanOnly =

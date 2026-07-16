@@ -66,13 +66,14 @@ int main(int argc, char **argv)
     VisionSystem vision(config.vision);                 // 创建视觉系统
 
     // 两队共用识别算法、协议编码和物理串口，只切换上层流程状态机。
-    // TeamA：全部数字 -> 发送数字数组 -> 全部豆子 -> 发送豆子数组。
-    // 每次结果生成并准备发送后保存断点，程序重启后会从下一阶段继续。
+    // TeamA：3个豆子 -> 5个数字 -> 一次发送6字节位置结果。
+    // 数字识别缓存由A/B共用：每个角度凑齐配置数量后，按多帧平均X从左到右整批保存。
     // TeamB：中心第1个豆子 -> 全部数字place1~5 -> 中心剩余新豆子；类型顺序不固定。
     CompetitionWorkflow workflow(config.workflow);      // 创建比赛工作流
     std::cout << "[Main] 当前队伍: " << teamModeToString(config.workflow.mode)
               << "，投票帧数=" << config.workflow.voteFramesPerStage
               << "，最少命中=" << config.workflow.minHitsPerStage
+              << "，每角度数字数=" << config.workflow.digitsPerView
               << "，B组中心区域宽度="
               << (config.workflow.teamBCenterWidthRatio * 100.0f) << "%" << std::endl;
     std::cout << "[Main] 串口模式: " << (config.serial.simulated ? "模拟发送" : "真实串口")

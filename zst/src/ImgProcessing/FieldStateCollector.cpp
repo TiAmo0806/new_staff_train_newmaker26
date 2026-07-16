@@ -1,5 +1,6 @@
 #include "ImgProcessing/FieldStateCollector.h"
 #include <algorithm>
+#include <iostream>
 
 namespace
 {
@@ -162,6 +163,10 @@ AngleCommitResult FieldStateCollector::addBoxFrame(const std::vector<Detection> 
         return {};                                      // 已完成，无需再累加
     }
 
+    // 同一帧中，同一个数字可能因为模型重复框而出现多次。
+    // 先为每个数字只选择置信度最高的一个框，保证“命中次数”真正表示命中了多少帧，
+    // 而不是某一帧产生了多少重复框；平均X坐标也不会被重复框带偏。
+    std::array<const Detection *, 6> bestDetectionByDigit{};
     for (const auto &d : detections)
     {
         // 箱子阶段只看数字箱框，豆子框全部跳过。
@@ -170,11 +175,21 @@ AngleCommitResult FieldStateCollector::addBoxFrame(const std::vector<Detection> 
             continue;                                   // 跳过非数字箱检测或无效数字
         }
 
-        // 当前角度中，这个数字又出现了一次。
-        boxStats_[d.digit].count++;                     // 该数字的出现次数 +1
+        // 已经由前一个角度保存过的数字不再参与本角度投票，避免重叠画面影响新数字排序。
+        if (seenDigits_[d.digit]) continue;
 
-        // 累加 x 坐标，后面用平均 x 决定从左到右顺序。
-        boxStats_[d.digit].xSum += detectionCenterX(d); // 累加中心 x 坐标
+        const Detection *&best = bestDetectionByDigit[d.digit];
+        if (best == nullptr || d.score > best->score)
+            best = &d;                                  // 同数字重复框只留下置信度最高者
+    }
+
+    for (int digit = 1; digit <= 5; ++digit)
+    {
+        const Detection *best = bestDetectionByDigit[digit];
+        if (best == nullptr) continue;                   // 本帧没有可靠看到这个数字
+
+        boxStats_[digit].count++;                        // 每个数字在一帧中最多命中一次
+        boxStats_[digit].xSum += detectionCenterX(*best); // 累加该帧最佳框中心X
     }
 
     // 当前角度累计一帧。
@@ -271,24 +286,68 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
 AngleCommitResult FieldStateCollector::commitBoxAngle()
 {
     AngleCommitResult result;
-    result.committed = true;                            // 标记本次调用产生了一次提交
+    result.committed = true;                            // 标记本次调用完成了一轮角度核对
 
     // 先筛出当前角度内”出现次数足够多”的数字。
     // 出现次数太少的数字可能是误检，不保存。
     std::vector<CandidateStat> candidates;
     for (int digit = 1; digit <= 5; ++digit)
     {
-        if (boxStats_[digit].count >= config_.minHitsPerAngle)
+        if (!seenDigits_[digit] &&
+            boxStats_[digit].count >= config_.minHitsPerAngle)
         {
-            candidates.push_back(boxStats_[digit]);     // 命中次数达标，加入候选
+            candidates.push_back(boxStats_[digit]);     // 未保存且命中次数达标，加入候选
         }
     }
+
+    // 第一角度通常要求4个新数字；当已经保存4个、数组只剩1个空位时，
+    // requiredCount会自动降为1，使第二角度可以只提交最后一个数字。
+    const int totalCapacity = static_cast<int>(state_.boxPlaces.size());
+    const int remainingCapacity = totalCapacity - nextBoxIndex_;
+    const int requiredCount = std::min(
+        std::max(1, config_.minNewDigitsPerCommit), remainingCapacity);
 
     // 当前角度内部按画面从左到右排序。
     // 例如当前角度看到 1-3-4，就按 1、3、4 的顺序处理。
     std::sort(candidates.begin(), candidates.end(), [](const CandidateStat &a, const CandidateStat &b) {
         return a.averageX() < b.averageX();             // 按平均 x 升序 = 从左到右
     });
+
+    // 数量不够时必须整批拒绝，绝不能先把2、5、1写进去，再在下一轮把迟到的4追加到末尾。
+    // 清空本轮临时投票后重新观察一轮，直到同一轮内凑齐requiredCount个稳定新数字。
+    if (static_cast<int>(candidates.size()) < requiredCount)
+    {
+        std::cout << "[数字角度核对] 稳定新数字=" << candidates.size()
+                  << "，要求=" << requiredCount << "，本轮不保存；候选=";
+        if (candidates.empty())
+        {
+            std::cout << "无";
+        }
+        else
+        {
+            for (size_t i = 0; i < candidates.size(); ++i)
+            {
+                if (i != 0) std::cout << ", ";
+                std::cout << candidates[i].id
+                          << "(命中=" << candidates[i].count
+                          << ",平均X=" << candidates[i].averageX() << ')';
+            }
+        }
+        std::cout << std::endl;
+        resetBoxAngle();
+        return result;
+    }
+
+    // 数量达标后再统一输出排序核对信息。这里的顺序就是即将写入boxPlaces的顺序。
+    std::cout << "[数字角度核对] 数量达标，从左到右=";
+    for (size_t i = 0; i < candidates.size(); ++i)
+    {
+        if (i != 0) std::cout << " -> ";
+        std::cout << candidates[i].id
+                  << "(命中=" << candidates[i].count
+                  << ",平均X=" << candidates[i].averageX() << ')';
+    }
+    std::cout << std::endl;
 
     for (const auto &candidate : candidates)
     {
@@ -313,6 +372,18 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
 
     // 五个位置都写满，箱子区识别完成。
     state_.boxReady = nextBoxIndex_ >= static_cast<int>(state_.boxPlaces.size());
+
+    // 提交后打印当前正式缓存，现场可以直接核对是否按物理画面从左到右排列。
+    std::cout << "[数字缓存] 已保存=" << nextBoxIndex_ << "/5，当前数组=[";
+    for (size_t i = 0; i < state_.boxPlaces.size(); ++i)
+    {
+        if (i != 0) std::cout << ' ';
+        std::cout << state_.boxPlaces[i];
+    }
+    std::cout << ']';
+    if (!state_.boxReady)
+        std::cout << "，请切换角度识别剩余数字";
+    std::cout << std::endl;
 
     // 一个角度提交完后，清空临时投票，准备下一个角度。
     resetBoxAngle();

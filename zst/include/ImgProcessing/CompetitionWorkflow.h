@@ -11,6 +11,7 @@ struct CompetitionWorkflowConfig
     TeamMode mode = TeamMode::TeamA;        // 当前队伍模式
     int voteFramesPerStage = 20;            // 每阶段累计投票帧数
     int minHitsPerStage = 6;                // 稳定结果最少命中帧数
+    int digitsPerView = 4;                  // A/B共用：每个相机角度至少凑齐几个新数字后才整批保存
     float teamBCenterWidthRatio = 0.40f;    // B组中心豆子区域宽度比例
 
     // 无ACK模式下，稳定结果生成并准备发送后立即推进阶段并保存断点。

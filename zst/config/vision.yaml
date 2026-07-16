@@ -30,6 +30,7 @@ workflow:
   team_mode: "team_a"                  # 只选择电脑内部流程，不作为字段发送给电控
   vote_frames_per_stage: 20            # 每个阶段累计多少帧后投票
   min_hits_per_stage: 6                # 目标至少命中多少帧才算稳定
+  digits_per_view: 4                   # A/B共用：每角度先凑齐4个稳定新数字，再按平均X从左到右整批保存
   team_b_center_width_ratio: 0.40      # 仅B组：只接受画面横向中间40%的豆子，A组不受影响
   resume_progress: true                # 结果生成并准备发送后保存断点；重启程序从下一阶段继续
   progress_file: "runtime/workflow_progress.txt" # 相对zst根目录；新比赛按R清空

@@ -17,6 +17,12 @@ struct FieldStateCollectorConfig
     // 例如 20 帧里至少出现 6 帧，才会被加入本角度结果。
     int minHitsPerAngle = 6;        // 当前角度内最少出现次数阈值
 
+    // 数字箱不能按照“第一次识别到的先后顺序”零散写入数组。
+    // 每个角度必须至少凑齐这么多个稳定、未保存且互不重复的新数字，才允许把该角度
+    // 的全部稳定数字按平均X坐标从左到右整批写入。设置为4表示第一角度必须先凑齐4个；
+    // 已保存4个、总容量只剩1个时，会自动把本轮要求降为1。
+    int minNewDigitsPerCommit = 4;
+
     // 每次豆子角度提交最多接受几个”新豆子”。
     // 队伍A一次可能看到多个豆子，使用3；队伍B要求”识别一个、发送一个”，使用1。
     // 这个限制只影响豆子，不影响数字箱；小于等于0表示不限制。
@@ -29,8 +35,8 @@ struct FieldStateCollectorConfig
 
 struct AngleCommitResult
 {
-    // true 表示刚刚完成了一个角度的投票并提交了结果。
-    bool committed = false;     // 本帧是否触发了一次角度提交
+    // true 表示刚刚完成了一个角度的投票核对；核对不通过时addedCount仍为0。
+    bool committed = false;     // 本帧是否触发了一次角度核对
 
     // 当前角度新增了多少个以前没保存过的目标。
     int addedCount = 0;         // 本次提交新增的目标数量
@@ -45,10 +51,9 @@ public:
     // 已经保存过的豆子类型会跳过，不会重复占用 bean_place。
     AngleCommitResult addBeanFrame(const std::vector<Detection> &detections);
 
-    // 数字箱阶段调用：累计若干帧后，按画面从左到右保存新数字。
-    // 适合你的“三个角度看箱子”方案。
-    // 例如第一次看到 2-1-3，第二次看到 1-3-4，
-    // 第二次的 1 和 3 会被跳过，只把 4 放到下一个 box_place。
+    // 数字箱阶段调用：一个角度累计若干帧后，先检查稳定新数字数量是否达到门槛；
+    // 达标后才依据多帧平均X坐标从左到右整批保存，未达标时本轮一个也不保存。
+    // 同一数字在同一帧最多计票一次，避免重复框把命中次数和平均X坐标带偏。
     AngleCommitResult addBoxFrame(const std::vector<Detection> &detections);
 
     const FieldState &state() const;     // 获取当前已保存的整场状态
@@ -92,7 +97,7 @@ private:
     AngleCommitResult commitBeanAngle();
 
     // 当前数字箱角度累计够 voteFramesPerAngle 后调用。
-    // 会把本角度稳定出现的数字按 x 从左到右追加到 FieldState。
+    // 只有稳定新数字数量达到minNewDigitsPerCommit（或剩余容量）时，才按X整批追加。
     AngleCommitResult commitBoxAngle();
 
     FieldStateCollectorConfig config_;
