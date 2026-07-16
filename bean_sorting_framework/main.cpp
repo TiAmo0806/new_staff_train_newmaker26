@@ -70,8 +70,8 @@ int main(int argc, char* argv[]) {
     }
 
     BeanDetector detector;
-    detector.setConfThreshold(0.65f);
-    detector.setNmsThreshold(0.05f);
+    detector.setConfThreshold(0.6f);
+    detector.setNmsThreshold(0.01);
     if (!detector.loadModel("models/best_opset11.onnx")) {
         std::cerr << "[Main] 模型未加载, 仅通信测试" << std::endl;
     }
@@ -83,7 +83,6 @@ int main(int argc, char* argv[]) {
     static constexpr int kDigitFirst = 3;
     static constexpr int kDigitCount = 5;
     static constexpr int kMinCollect = 4;
-
     BeanDetector::Detection digit_buf[kDigitCount];
     int digit_ok[kDigitCount] = {0,0,0,0,0};
 

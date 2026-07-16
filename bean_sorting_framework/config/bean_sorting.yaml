@@ -6,7 +6,7 @@
     gain: 10
 
   model:
-    path: "models/bean_detect.onnx"
+    path: "best5.onnx"
     conf_threshold: 0.7
     nms_threshold: 0.45
     input_width: 640
