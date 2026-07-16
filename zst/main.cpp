@@ -13,11 +13,97 @@
 #include "Communication/VirtualSerial.h"
 #include "ImgProcessing/VisionSystem.h"
 #include "Tool/Utils.h"
+#include <algorithm>
 #include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
+#include <sstream>
 #include <string>
 #include <thread>
+
+namespace
+{
+// 将当前帧有效检测按框中心X从左到右排列。
+// 这里只用于debug日志和画面提示，不会改变工作流的多帧投票、正式排序和发送数据。
+std::vector<Detection> leftToRightDetections(const std::vector<Detection> &detections)
+{
+    std::vector<Detection> sorted;
+    for (const Detection &d : detections)
+    {
+        if (d.kind == TargetKind::Bean || d.kind == TargetKind::DigitBox)
+            sorted.push_back(d);
+    }
+    std::sort(sorted.begin(), sorted.end(), [](const Detection &a, const Detection &b) {
+        return a.box.x + a.box.width / 2 < b.box.x + b.box.width / 2;
+    });
+    return sorted;
+}
+
+// 生成不含浮点抖动的签名。只有类别或左右顺序变化时才重新打印当前帧日志，
+// 避免置信度和坐标每帧轻微变化导致终端刷屏。
+std::string detectionSignature(const std::vector<Detection> &sorted)
+{
+    std::ostringstream oss;
+    for (const Detection &d : sorted)
+    {
+        // 豆子可能被SVM覆盖类别，不能只看YOLO原始classId；否则SVM结果变化时
+        // debug日志不会刷新。数字则直接使用最终digit值。
+        const int finalValue = d.kind == TargetKind::Bean
+            ? static_cast<int>(encodeBeanType(d.bean))
+            : d.digit;
+        oss << static_cast<int>(d.kind) << ':' << finalValue << ';';
+    }
+    return oss.str();
+}
+
+// debug终端详细说明：目标类型、识别值、置信度和原图中心X。
+std::string detectionLogText(const std::vector<Detection> &sorted)
+{
+    std::ostringstream oss;
+    oss << "[Debug识别] 当前帧从左到右=";
+    if (sorted.empty()) return oss.str() + "[无有效目标]";
+
+    oss << '[';
+    for (std::size_t i = 0; i < sorted.size(); ++i)
+    {
+        if (i != 0) oss << " | ";
+        const Detection &d = sorted[i];
+        if (d.kind == TargetKind::DigitBox)
+            oss << "数字" << d.digit;
+        else
+            oss << "豆子" << beanToString(d.bean);
+        oss << " conf=" << std::fixed << std::setprecision(2) << d.score
+            << " centerX=" << (d.box.x + d.box.width / 2);
+    }
+    oss << ']';
+    return oss.str();
+}
+
+// OpenCV内置字体不能可靠显示中文，因此窗口上使用短英文；终端仍打印完整中文说明。
+std::string detectionOverlayText(const std::vector<Detection> &sorted)
+{
+    std::ostringstream oss;
+    oss << "YOLO L-R:";
+    for (const Detection &d : sorted)
+    {
+        if (d.kind == TargetKind::DigitBox)
+            oss << " D" << d.digit;
+        else
+            oss << " B" << static_cast<int>(encodeBeanType(d.bean));
+    }
+    if (sorted.empty()) oss << " NONE";
+    return oss.str();
+}
+
+std::string digitLayoutKey(const FieldState &state)
+{
+    std::ostringstream oss;
+    for (int value : state.boxPlaces) oss << value << ',';
+    return oss.str();
+}
+}
 
 int main(int argc, char **argv)
 {
@@ -35,7 +121,7 @@ int main(int argc, char **argv)
     AppConfig config;
     if (!loadAppConfig(configPath, config))             // 从 YAML 加载全部配置
     {
-        // 模型路径也来自配置文件，继续运行只会在加载 ONNX 时再次报错。
+        // 模型路径也来自配置文件，继续运行只会在OpenVINO加载ONNX时再次报错。
         std::cerr << "[Main] 配置文件加载失败，程序退出" << std::endl;
         return 1;                                       // 非零退出码表示异常
     }
@@ -48,7 +134,7 @@ int main(int argc, char **argv)
     bool cameraEnabled = config.runMode == AppRunMode::Debug;
 
     // 3. 优先初始化串口。
-    // 串口放在ONNX模型加载之前打开，尽量避免程序启动阶段电控已经发送camera_state=1，
+    // 串口放在OpenVINO模型加载之前打开，尽量避免启动阶段电控已发送camera_state=1，
     // 但视觉端还没有打开串口而错过控制帧。
     VirtualSerial serial(config.serial);                // 创建双向串口
     if (!serial.openPort())
@@ -59,7 +145,7 @@ int main(int argc, char **argv)
 
     // 4. 初始化视觉系统。
     // VisionSystem 内部包含：
-    //   YOLO ONNX Runtime 检测；
+    //   OpenVINO直接加载best5.onnx并执行YOLO检测；
     //   SVM 豆子二次分类；
     //   TaskPlanner 比赛规则决策。
     // 模型可以提前加载；比赛模式等待camera_state=1，调试模式会直接开始逐帧推理。
@@ -74,6 +160,8 @@ int main(int argc, char **argv)
               << "，投票帧数=" << config.workflow.voteFramesPerStage
               << "，最少命中=" << config.workflow.minHitsPerStage
               << "，每角度数字数=" << config.workflow.digitsPerView
+              << "，place5推断="
+              << (config.workflow.inferPlace5FromFirstFour ? "开启" : "关闭")
               << "，B组中心区域宽度="
               << (config.workflow.teamBCenterWidthRatio * 100.0f) << "%" << std::endl;
     std::cout << "[Main] 串口模式: " << (config.serial.simulated ? "模拟发送" : "真实串口")
@@ -122,8 +210,24 @@ int main(int argc, char **argv)
 
     int consecutiveCaptureFailures = 0;
     cv::Mat lastDebugImage;                            // 相机短暂掉线时保持窗口可响应
+    std::string lastDebugDetectionSignature = "<首次输出>"; // 第一帧即使无目标也会输出一次
+    std::string lastDebugFinalLayout;                  // 最终5位数组只打印一次
 
     auto sendWorkflowResult = [&](const VisionTxPacket &packet) {
+        if (config.runMode == AppRunMode::Debug)
+        {
+            // 这里打印的DATA就是电控在CMD之后实际解析的业务字节，不包含日志文字。
+            std::cout << "[Debug待发送] CMD=0x" << std::hex << std::uppercase
+                      << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(packet.command) << std::dec
+                      << std::setfill(' ') << "，DATA(十进制)=[";
+            for (std::size_t i = 0; i < packet.data.size(); ++i)
+            {
+                if (i != 0) std::cout << ' ';
+                std::cout << static_cast<int>(packet.data[i]);
+            }
+            std::cout << "]" << std::endl;
+        }
         std::cout << "[Serial] 发送识别结果：cmd=0x" << std::hex << std::uppercase
                   << static_cast<int>(packet.command) << std::dec << std::endl;
         const bool written = serial.sendPacket(packet);
@@ -253,6 +357,23 @@ int main(int argc, char **argv)
         // result.debugImage：画好框和文字的调试图。
         VisionFrameResult result = vision.process(frame); // 完整一帧视觉处理
 
+        // debug模式显示YOLO当前帧结果。正式位置仍由FieldStateCollector进行多帧投票，
+        // 不能把这一行单帧结果误认为已经保存或已经发送给电控。
+        std::vector<Detection> debugSortedDetections;
+        if (config.runMode == AppRunMode::Debug)
+        {
+            debugSortedDetections = leftToRightDetections(result.detections);
+            const std::string signature = detectionSignature(debugSortedDetections);
+            if (signature != lastDebugDetectionSignature)
+            {
+                std::cout << detectionLogText(debugSortedDetections) << std::endl;
+                lastDebugDetectionSignature = signature;
+            }
+            cv::putText(result.debugImage, detectionOverlayText(debugSortedDetections),
+                        cv::Point(20, 75), cv::FONT_HERSHEY_SIMPLEX, 0.65,
+                        cv::Scalar(255, 255, 0), 2);
+        }
+
         // 7. 当前队伍工作流决定"这一帧是否产生阶段消息"。
         // update只处理识别顺序和生成消息，不直接操作串口，因此TeamA/B流程可以独立测试。
         // 无ACK模式下，结果生成后工作流立即进入下一阶段，并只发送一次。
@@ -263,6 +384,28 @@ int main(int argc, char **argv)
         {
             // 当前每个阶段最多产生一条结果，直接通过串口发送，不等待电控确认。
             sendWorkflowResult(tx);
+        }
+
+        // place1~place4按多帧平均X排序确认后，place5由15减去前四位数字之和推断。
+        // 这里同时在debug终端和画面显示最终五位数组；两队共用同一套数字缓存逻辑。
+        if (config.runMode == AppRunMode::Debug && workflow.state().boxReady)
+        {
+            const FieldState &state = workflow.state();
+            const std::string layoutKey = digitLayoutKey(state);
+            if (layoutKey != lastDebugFinalLayout)
+            {
+                std::cout << "[Debug最终推断] 数字布局=[place1=" << state.boxPlaces[0]
+                          << ", place2=" << state.boxPlaces[1]
+                          << ", place3=" << state.boxPlaces[2]
+                          << ", place4=" << state.boxPlaces[3]
+                          << ", place5=" << state.boxPlaces[4] << "]" << std::endl;
+                lastDebugFinalLayout = layoutKey;
+            }
+            std::ostringstream overlay;
+            overlay << "FINAL P1-P5:";
+            for (int digit : state.boxPlaces) overlay << ' ' << digit;
+            cv::putText(result.debugImage, overlay.str(), cv::Point(20, 105),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.70, cv::Scalar(0, 255, 255), 2);
         }
 
         // 保存最近一张识别结果图。相机短暂掉线时继续显示该图并处理退出按键。

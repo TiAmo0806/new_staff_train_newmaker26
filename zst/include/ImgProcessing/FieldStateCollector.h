@@ -23,6 +23,16 @@ struct FieldStateCollectorConfig
     // 已保存4个、总容量只剩1个时，会自动把本轮要求降为1。
     int minNewDigitsPerCommit = 4;
 
+    // true：当前相机画面固定对应物理place1~place4，place5完全不可见。
+    // 第一轮恰好得到4个稳定不同数字后，按平均X从左到右写入place1~4，
+    // 再利用数字1~5总和为15推断place5，不需要切换第二角度。
+    bool inferPlace5FromFirstFour = true;
+
+    // 豆子一次提交前至少需要多少个稳定、未保存的新类别。
+    // A组设为3：必须黄豆、绿豆、白芸豆全部稳定出现后，才按平均X整批写入；
+    // 少任何一个都不允许部分保存。B组设为1：中心豆子稳定后立即保存并发送。
+    int minNewBeansPerCommit = 3;
+
     // 每次豆子角度提交最多接受几个”新豆子”。
     // 队伍A一次可能看到多个豆子，使用3；队伍B要求”识别一个、发送一个”，使用1。
     // 这个限制只影响豆子，不影响数字箱；小于等于0表示不限制。
@@ -47,8 +57,9 @@ class FieldStateCollector
 public:
     explicit FieldStateCollector(const FieldStateCollectorConfig &config);
 
-    // 豆子阶段调用：A组按画面从左到右保存；B组由配置只选最稳定的中心候选。
-    // 已经保存过的豆子类型会跳过，不会重复占用 bean_place。
+    // 豆子阶段调用：A组必须凑齐全部稳定豆子后按多帧平均X整批保存；
+    // B组由配置只选最稳定的中心候选。已保存类型不会重复占用bean_place。
+    // 同一帧同一豆子类别最多计票一次，重复框只保留置信度最高的一个。
     AngleCommitResult addBeanFrame(const std::vector<Detection> &detections);
 
     // 数字箱阶段调用：一个角度累计若干帧后，先检查稳定新数字数量是否达到门槛；
@@ -93,7 +104,8 @@ private:
     void resetBoxAngle();
 
     // 当前豆子角度累计够 voteFramesPerAngle 后调用。
-    // 会把本角度稳定出现的豆子按 x 从左到右追加到 FieldState。
+    // A组只有稳定新豆子数量达到minNewBeansPerCommit时才按X整批写入；
+    // B组只确认中心最高票候选并逐个保存。
     AngleCommitResult commitBeanAngle();
 
     // 当前数字箱角度累计够 voteFramesPerAngle 后调用。

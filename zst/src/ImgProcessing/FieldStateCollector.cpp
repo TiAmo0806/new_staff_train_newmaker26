@@ -20,6 +20,14 @@ BeanType decodeBeanType(int id)
     if (id == 3) return BeanType::WhiteKidneyBean;  // 编码 3 -> 白芸豆
     return BeanType::Unknown;                        // 未知编码
 }
+
+const char *beanChineseName(int id)
+{
+    if (id == 1) return "黄豆";
+    if (id == 2) return "绿豆";
+    if (id == 3) return "白芸豆";
+    return "未知豆子";
+}
 }
 
 FieldStateCollector::FieldStateCollector(const FieldStateCollectorConfig &config)
@@ -120,6 +128,9 @@ AngleCommitResult FieldStateCollector::addBeanFrame(const std::vector<Detection>
         return {};                                      // 已完成，无需再累加
     }
 
+    // 同一帧可能产生同类别重复框。和数字逻辑一样，每个豆子类别只选择置信度
+    // 最高的一个框参与本帧计票，防止单帧重复框把命中数和平均X坐标放大。
+    std::array<const Detection *, 4> bestDetectionByBean{};
     for (const auto &d : detections)
     {
         // 豆子阶段只看豆子框，数字箱框全部跳过。
@@ -135,11 +146,18 @@ AngleCommitResult FieldStateCollector::addBeanFrame(const std::vector<Detection>
             continue;                                   // 未知豆子类型，跳过
         }
 
-        // 当前角度中，这种豆子又出现了一次。
-        beanStats_[code].count++;                       // 该豆子类型的出现次数 +1
+        const Detection *&best = bestDetectionByBean[code];
+        if (best == nullptr || d.score > best->score)
+            best = &d;                                  // 同类重复框只保留最高置信度者
+    }
 
-        // 累加 x 坐标，后面用平均 x 决定从左到右顺序。
-        beanStats_[code].xSum += detectionCenterX(d);   // 累加中心 x 坐标
+    for (int code = 1; code <= 3; ++code)
+    {
+        const Detection *best = bestDetectionByBean[code];
+        if (best == nullptr) continue;                   // 本帧没有识别到该豆子类型
+
+        beanStats_[code].count++;                        // 每个类别每帧最多命中一次
+        beanStats_[code].xSum += detectionCenterX(*best); // 累加最佳框中心X
     }
 
     // 当前角度累计一帧。
@@ -209,18 +227,41 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
     AngleCommitResult result;
     result.committed = true;                            // 标记本次调用产生了一次提交
 
+    const bool teamBMode = config_.selectMostFrequentBeanOnly;
+    const char *logPrefix = teamBMode ? "[B组中心豆子核对]" : "[A组豆子核对]";
+
     // 先筛出当前角度内”出现次数足够多”的豆子。
-    // 出现次数太少的结果可能是误检，不保存。
+    // A组只考虑尚未保存的新类别；B组必须保留已经保存的最高票类别，
+    // 这样中心出现重复豆子时会明确判重，而不会错误改选旁边/第二名类别。
     std::vector<CandidateStat> candidates;
     for (int id = 1; id <= 3; ++id)
     {
-        if (beanStats_[id].count >= config_.minHitsPerAngle)
+        if (beanStats_[id].count >= config_.minHitsPerAngle &&
+            (teamBMode || !seenBeans_[id]))
         {
             candidates.push_back(beanStats_[id]);       // 命中次数达标，加入候选
         }
     }
 
-    if (config_.selectMostFrequentBeanOnly)
+    // 每轮投票完成都打印识别候选，A/B两组现场都能看到模型稳定识别了什么。
+    std::cout << logPrefix << " 稳定候选=";
+    if (candidates.empty())
+    {
+        std::cout << "无";
+    }
+    else
+    {
+        for (std::size_t i = 0; i < candidates.size(); ++i)
+        {
+            if (i != 0) std::cout << " | ";
+            std::cout << beanChineseName(candidates[i].id)
+                      << "(命中=" << candidates[i].count
+                      << ",平均X=" << candidates[i].averageX() << ')';
+        }
+    }
+    std::cout << std::endl;
+
+    if (teamBMode)
     {
         // B组输入已经被上层筛成“每帧唯一中心豆子”。若20帧内类别有抖动，
         // 选择出现次数最多的类别，而不是按X选择。只保留第一名非常重要：
@@ -232,17 +273,54 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
         });
         // 第一名并列说明中心目标在本轮不稳定，宁可继续观察，也不猜测并误发。
         if (candidates.size() > 1 && candidates[0].count == candidates[1].count)
+        {
+            std::cout << "[B组中心豆子核对] 最高票并列，中心类别不稳定，本轮不保存"
+                      << std::endl;
             candidates.clear();
+        }
         else if (candidates.size() > 1)
             candidates.resize(1);
+
+        if (!candidates.empty())
+        {
+            std::cout << "[B组中心豆子识别] 最终确认="
+                      << beanChineseName(candidates[0].id)
+                      << "，命中=" << candidates[0].count
+                      << "，平均X=" << candidates[0].averageX() << std::endl;
+        }
     }
     else
     {
-        // A组保持原逻辑：当前角度内按画面从左到右排序并保存全部稳定豆子。
+        // A组必须先凑齐本阶段全部新豆子，再允许写入任何一个位置。
+        // 例如只稳定识别到黄豆和白芸豆时，本轮两个都不保存，下一轮重新完整投票，
+        // 从根本上避免跨轮追加破坏三者的物理左右顺序。
+        const int remainingCapacity =
+            static_cast<int>(state_.beanPlaces.size()) - nextBeanIndex_;
+        const int requiredCount =
+            std::min(std::max(1, config_.minNewBeansPerCommit), remainingCapacity);
+        if (static_cast<int>(candidates.size()) < requiredCount)
+        {
+            std::cout << "[A组豆子核对] 稳定新豆子=" << candidates.size()
+                      << '/' << requiredCount
+                      << "，尚未全部识别，本轮一个也不保存" << std::endl;
+            resetBeanAngle();
+            return result;
+        }
+
+        // 三类全部稳定后，按多帧平均X从左到右一次性确定物理位置1~3。
         std::sort(candidates.begin(), candidates.end(), [](const CandidateStat &a,
                                                            const CandidateStat &b) {
             return a.averageX() < b.averageX();
         });
+        std::cout << "[A组豆子排序] 三类均已稳定，从左到右=";
+        for (std::size_t i = 0; i < candidates.size(); ++i)
+        {
+            if (i != 0) std::cout << " -> ";
+            std::cout << beanChineseName(candidates[i].id)
+                      << "(命中=" << candidates[i].count
+                      << ",平均X=" << candidates[i].averageX() << ')';
+        }
+        std::cout << std::endl;
     }
 
     for (const auto &candidate : candidates)
@@ -259,6 +337,9 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
         // 如果这种豆子之前已经保存过，说明这是多角度重叠识别，跳过。
         if (seenBeans_[candidate.id])
         {
+            if (teamBMode)
+                std::cout << "[B组豆子保存] " << beanChineseName(candidate.id)
+                          << "以前已经保存，本轮不重复保存、不重复发送" << std::endl;
             continue;                                   // 已保存过的豆子类型
         }
 
@@ -277,6 +358,26 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
 
     // 三个位置都写满，豆子区识别完成。
     state_.beanReady = nextBeanIndex_ >= static_cast<int>(state_.beanPlaces.size());
+
+    // 保存日志与识别候选日志分开：前者明确表示哪些结果已经进入正式缓存，
+    // 后续状态机和串口只会使用这里展示的正式缓存。
+    if (result.addedCount > 0)
+    {
+        std::cout << (teamBMode ? "[B组豆子保存]" : "[A组豆子保存]")
+                  << " 新增=" << result.addedCount << "，正式缓存=[";
+        for (int i = 0; i < nextBeanIndex_; ++i)
+        {
+            if (i != 0) std::cout << " | ";
+            const int code = static_cast<int>(encodeBeanType(state_.beanPlaces[i]));
+            std::cout << "位置" << (i + 1) << '=' << beanChineseName(code)
+                      << "(编码" << code << ')';
+        }
+        std::cout << "]，完成=" << (state_.beanReady ? "是" : "否") << std::endl;
+    }
+    else if (candidates.empty())
+    {
+        std::cout << logPrefix << " 本轮没有可保存结果，继续采集下一轮" << std::endl;
+    }
 
     // 一个角度提交完后，清空临时投票，准备下一个角度。
     resetBeanAngle();
@@ -300,12 +401,15 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
         }
     }
 
-    // 第一角度通常要求4个新数字；当已经保存4个、数组只剩1个空位时，
-    // requiredCount会自动降为1，使第二角度可以只提交最后一个数字。
+    // 普通多角度模式下，第一角度通常要求4个新数字；数组只剩1个空位时，
+    // requiredCount会自动降为1。place5推断模式则固定要求第一轮恰好4个。
     const int totalCapacity = static_cast<int>(state_.boxPlaces.size());
     const int remainingCapacity = totalCapacity - nextBoxIndex_;
-    const int requiredCount = std::min(
-        std::max(1, config_.minNewDigitsPerCommit), remainingCapacity);
+    const bool inferPlace5ThisRound =
+        config_.inferPlace5FromFirstFour && nextBoxIndex_ == 0 && remainingCapacity == 5;
+    const int requiredCount = inferPlace5ThisRound
+        ? 4
+        : std::min(std::max(1, config_.minNewDigitsPerCommit), remainingCapacity);
 
     // 当前角度内部按画面从左到右排序。
     // 例如当前角度看到 1-3-4，就按 1、3、4 的顺序处理。
@@ -313,12 +417,16 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
         return a.averageX() < b.averageX();             // 按平均 x 升序 = 从左到右
     });
 
-    // 数量不够时必须整批拒绝，绝不能先把2、5、1写进去，再在下一轮把迟到的4追加到末尾。
-    // 清空本轮临时投票后重新观察一轮，直到同一轮内凑齐requiredCount个稳定新数字。
-    if (static_cast<int>(candidates.size()) < requiredCount)
+    // 推断模式必须“恰好4个”：少于4个无法推断，出现5个则与“画面只含place1~4”矛盾，
+    // 很可能混入误检，因此两种情况都整批拒绝。普通模式只要求不少于requiredCount。
+    const bool candidateCountInvalid = inferPlace5ThisRound
+        ? static_cast<int>(candidates.size()) != requiredCount
+        : static_cast<int>(candidates.size()) < requiredCount;
+    if (candidateCountInvalid)
     {
         std::cout << "[数字角度核对] 稳定新数字=" << candidates.size()
-                  << "，要求=" << requiredCount << "，本轮不保存；候选=";
+                  << "，要求=" << (inferPlace5ThisRound ? "恰好" : "至少")
+                  << requiredCount << "，本轮不保存；候选=";
         if (candidates.empty())
         {
             std::cout << "无";
@@ -336,6 +444,33 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
         std::cout << std::endl;
         resetBoxAngle();
         return result;
+    }
+
+    // 数字1~5各出现一次，总和固定为15。推断模式下四个候选已经保证互不重复，
+    // 因而15减去四个候选之和就是唯一缺失数字，也就是不可见的place5内容。
+    int inferredPlace5Digit = 0;
+    if (inferPlace5ThisRound)
+    {
+        int detectedDigitSum = 0;
+        for (const CandidateStat &candidate : candidates)
+            detectedDigitSum += candidate.id;
+        inferredPlace5Digit = 15 - detectedDigitSum;
+
+        const bool inferredDigitInvalid =
+            inferredPlace5Digit < 1 || inferredPlace5Digit > 5 ||
+            std::any_of(candidates.begin(), candidates.end(), [&](const CandidateStat &candidate) {
+                return candidate.id == inferredPlace5Digit;
+            });
+        if (inferredDigitInvalid)
+        {
+            // 理论上“4个互不重复且均在1~5”不会进入这里；保留防御检查，避免未来改动
+            // 放宽候选条件后，把0、负数或重复数字写入正式数组。
+            std::cerr << "[数字角度核对] place5推断非法：四个数字总和="
+                      << detectedDigitSum << "，推断值=" << inferredPlace5Digit
+                      << "，本轮不保存" << std::endl;
+            resetBoxAngle();
+            return result;
+        }
     }
 
     // 数量达标后再统一输出排序核对信息。这里的顺序就是即将写入boxPlaces的顺序。
@@ -368,6 +503,18 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
         seenDigits_[candidate.id] = true;               // 标记为已见过
         nextBoxIndex_++;                                // 下一个写入位置
         result.addedCount++;                            // 新增计数 +1
+    }
+
+    if (inferPlace5ThisRound)
+    {
+        // 当前相机画面固定从左到右对应place1~place4，所以四个候选排序写完后，
+        // 推断数字只能写到最后一个物理位置place5，不能参与X排序。
+        state_.boxPlaces[nextBoxIndex_] = inferredPlace5Digit;
+        seenDigits_[inferredPlace5Digit] = true;
+        nextBoxIndex_++;
+        result.addedCount++;
+        std::cout << "[数字推断] place5不可见，15-前四个数字之和="
+                  << inferredPlace5Digit << "，已写入place5" << std::endl;
     }
 
     // 五个位置都写满，箱子区识别完成。

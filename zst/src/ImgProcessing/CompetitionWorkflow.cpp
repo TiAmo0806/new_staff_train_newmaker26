@@ -97,14 +97,17 @@ CompetitionWorkflow::CompetitionWorkflow(const CompetitionWorkflowConfig &config
 
 FieldStateCollector CompetitionWorkflow::makeCollector() const
 {
-    // FieldStateCollector 原本可以在一次角度提交中保存多个新豆子。
-    // TeamA正好需要一次看到多个豆子；TeamB要求"识别一个、发送一个"，
-    // 所以TeamB把 maxNewBeansPerCommit 限制为1。
+    // TeamA必须等三类豆子全部稳定后按平均X整批写入；TeamB要求中心豆子
+    // “识别一个、发送一个”，因此两队的最小提交数和单次上限分别配置。
     FieldStateCollectorConfig collectorConfig;
     collectorConfig.voteFramesPerAngle = std::max(1, config_.voteFramesPerStage);   // 至少 1 帧
     collectorConfig.minHitsPerAngle = std::max(1, config_.minHitsPerStage);         // 至少 1 次
     collectorConfig.minNewDigitsPerCommit =
         std::clamp(config_.digitsPerView, 1, 5);              // A/B共用：每个角度整批保存数字的门槛
+    collectorConfig.inferPlace5FromFirstFour =
+        config_.inferPlace5FromFirstFour;                     // A/B共用：固定看place1~4时推断place5
+    collectorConfig.minNewBeansPerCommit =
+        config_.mode == TeamMode::TeamA ? 3 : 1;              // A组必须3个齐全；B组中心豆子逐个确认
     collectorConfig.maxNewBeansPerCommit =
         config_.mode == TeamMode::TeamB ? 1 : 3;            // TeamB 每次最多新增 1 个豆子
     collectorConfig.selectMostFrequentBeanOnly =
@@ -481,7 +484,8 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamA(
 
     if (teamAStage_ == TeamAStage::WaitingBeans)
     {
-        // A组第一阶段只收集豆子。收集器会按检测框中心X坐标从左到右保存，
+        // A组第一阶段只收集豆子。三类必须在同一轮多帧投票中全部稳定，
+        // 然后按平均中心X从左到右一次性保存；少一个时不会部分写入。
         // 因而beanPlaces[0..2]代表物理位置1~3，而不是固定代表黄、绿、白。
         collector_.addBeanFrame(detections);                // 累计豆子帧；中间投票不刷屏
 

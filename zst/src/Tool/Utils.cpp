@@ -102,6 +102,8 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
         {
             const auto m = y["model"];
             if (m["onnx_path"]) config.vision.yolo.modelPath = m["onnx_path"].as<std::string>();
+            if (m["device"]) config.vision.yolo.device = m["device"].as<std::string>();
+            if (m["cache_dir"]) config.vision.yolo.cacheDir = m["cache_dir"].as<std::string>();
             if (m["svm_path"]) config.vision.svmPath = m["svm_path"].as<std::string>();
             if (m["input_width"]) config.vision.yolo.inputWidth = m["input_width"].as<int>();
             if (m["input_height"]) config.vision.yolo.inputHeight = m["input_height"].as<int>();
@@ -163,6 +165,9 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
             if (w["digits_per_view"])
                 config.workflow.digitsPerView =
                     std::clamp(w["digits_per_view"].as<int>(), 1, 5);
+            if (w["infer_place5_from_first_four"])
+                config.workflow.inferPlace5FromFirstFour =
+                    w["infer_place5_from_first_four"].as<bool>();
             if (w["team_b_center_width_ratio"])
                 config.workflow.teamBCenterWidthRatio =
                     w["team_b_center_width_ratio"].as<float>();
@@ -188,6 +193,7 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
                 value = (projectRoot / relativeOrAbsolute).lexically_normal().string();
         };
         resolveProjectPath(config.vision.yolo.modelPath);
+        resolveProjectPath(config.vision.yolo.cacheDir);
         resolveProjectPath(config.vision.svmPath);
         resolveProjectPath(config.workflow.progressFile);
         return true;

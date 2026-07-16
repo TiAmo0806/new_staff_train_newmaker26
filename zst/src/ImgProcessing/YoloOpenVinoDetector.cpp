@@ -1,16 +1,18 @@
-#include "ImgProcessing/YoloOrtDetector.h"
+#include "ImgProcessing/YoloOpenVinoDetector.h"
 #include <algorithm>
-#include <array>
 #include <cmath>
+#include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <numeric>
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
+#include <sstream>
 #include <stdexcept>
 
 namespace
 {
-// 类别编号就是训练数据集 YAML 中 names 的下标，顺序必须与导出 best.onnx 时一致。
+// 类别编号就是训练数据集 YAML 中 names 的下标，顺序必须与导出best5.onnx时一致。
 // 前 3 类是豆子，后 5 类是数字箱；若训练时改过 names 顺序，此处也必须同步修改。
 const std::vector<std::string> kClassNames = {
     "soybean", "mung_bean", "white_kidney_bean",    // 0~2: 豆子类
@@ -24,41 +26,90 @@ float iou(const cv::Rect &a, const cv::Rect &b)
     const int uni = a.area() + b.area() - inter;    // 并集面积 = A + B - 交集
     return uni > 0 ? static_cast<float>(inter) / uni : 0.0f; // 避免除零
  }
+
+// 把OpenVINO张量形状转换成便于阅读的字符串，例如[1,3,640,640]。
+// 初始化时打印真实输入和输出形状，可以快速发现模型导出尺寸或类别数不匹配。
+std::string shapeToString(const ov::Shape &shape)
+{
+    std::ostringstream oss;
+    oss << '[';
+    for (std::size_t i = 0; i < shape.size(); ++i)
+    {
+        if (i != 0) oss << ',';
+        oss << shape[i];
+    }
+    oss << ']';
+    return oss.str();
+}
 }
 
-YoloOrtDetector::YoloOrtDetector(const YoloConfig &config)
-    : config_(config),
-      env_(ORT_LOGGING_LEVEL_WARNING, "logistics_yolo"),     // 创建 ONNX 环境，WARNING 级别日志
-      sessionOptions_(),
-      session_(nullptr)
+YoloOpenVinoDetector::YoloOpenVinoDetector(const YoloConfig &config)
+    : config_(config)
 {
-    // 0表示使用ONNX Runtime默认线程策略；现场也可在YAML中固定线程数做性能对比。
+    if (!std::filesystem::is_regular_file(config_.modelPath))
+        throw std::runtime_error("OpenVINO model file not found: " + config_.modelPath);
+
+    // 创建缓存目录并交给OpenVINO。第一次启动会编译best5.onnx并写入缓存，
+    // 后续启动若模型、设备和OpenVINO版本未变化，就可以直接复用已编译结果。
+    if (!config_.cacheDir.empty())
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(config_.cacheDir, ec);
+        if (ec)
+            throw std::runtime_error("cannot create OpenVINO cache directory: " +
+                                     config_.cacheDir + ": " + ec.message());
+        core_.set_property(ov::cache_dir(config_.cacheDir));
+    }
+
+    // 只有用户在YAML中显式指定正数时才固定线程数；0完全交给OpenVINO自动选择。
+    ov::AnyMap compileProperties;
     if (config_.intraOpThreads > 0)
-        sessionOptions_.SetIntraOpNumThreads(config_.intraOpThreads);
+        compileProperties.emplace(ov::inference_num_threads.name(), config_.intraOpThreads);
 
-    // 开启 ONNX Runtime 图优化，能合并一些算子，CPU 推理会更快。
-    sessionOptions_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL); // 启用全部安全图优化
+    // 直接把ONNX路径交给OpenVINO。这里没有ONNX Runtime，也不需要先转成.xml/.bin。
+    // AUTO会在NUC上从已安装的Intel设备插件中自动选择；需要强制CPU时在YAML写CPU。
+    compiledModel_ = core_.compile_model(config_.modelPath, config_.device, compileProperties);
+    inferRequest_ = compiledModel_.create_infer_request();
 
-    // 真正加载 .onnx 模型。如果路径错，这里会直接抛异常。
-    session_ = Ort::Session(env_, config_.modelPath.c_str(), sessionOptions_); // 加载 ONNX 模型
+    if (compiledModel_.inputs().size() != 1 || compiledModel_.outputs().size() != 1)
+        throw std::runtime_error("best5.onnx must have exactly one input and one output");
 
-    // 保存输入/输出节点名，Run 时必须传 const char*。
-    // 大部分 YOLO 导出模型只有一个输入和一个输出。
-    auto inputName = session_.GetInputNameAllocated(0, allocator_);   // 获取第一个输入节点名
-    auto outputName = session_.GetOutputNameAllocated(0, allocator_); // 获取第一个输出节点名
-    inputNamesText_.push_back(inputName.get());                       // 保存到 std::string 容器
-    outputNamesText_.push_back(outputName.get());
-    inputNames_.push_back(inputNamesText_[0].c_str());               // 取 c_str 供 Run() 使用
-    outputNames_.push_back(outputNamesText_[0].c_str());
+    const ov::Output<const ov::Node> inputPort = compiledModel_.input();
+    const ov::Output<const ov::Node> outputPort = compiledModel_.output();
+    const ov::Shape inputShape = inputPort.get_shape();
+    const ov::Shape outputShape = outputPort.get_shape();
+    const ov::Shape expectedInput{1U, 3U,
+                                  static_cast<std::size_t>(config_.inputHeight),
+                                  static_cast<std::size_t>(config_.inputWidth)};
+    if (inputShape != expectedInput)
+        throw std::runtime_error("best5.onnx input shape " + shapeToString(inputShape) +
+                                 " does not match configured " + shapeToString(expectedInput));
+    if (inputPort.get_element_type() != ov::element::f32 ||
+        outputPort.get_element_type() != ov::element::f32)
+        throw std::runtime_error("best5.onnx input/output must be float32");
+    if (outputShape.size() != 3)
+        throw std::runtime_error("unexpected best5.onnx output shape: " +
+                                 shapeToString(outputShape));
+    // 本工程固定8类，所以YOLO输出的小维度必须严格等于4个框参数+8个类别=12。
+    // 不能只检查“至少12”，否则误放入80类模型时会静默按错误类别表解析。
+    const std::size_t outputChannels = std::min(outputShape[1], outputShape[2]);
+    if (outputChannels != 4U + kClassNames.size())
+        throw std::runtime_error("best5.onnx class count does not match project: output=" +
+                                 shapeToString(outputShape) + ", expected 12 channels");
 
-    std::cout << "[YoloOrt] model loaded: " << config_.modelPath << std::endl;
-    std::cout << "[YoloOrt] intra-op threads: "
+    std::cout << "[OpenVINO] 模型加载成功: " << config_.modelPath << std::endl;
+    std::cout << "[OpenVINO] 设备=" << config_.device
+              << "，输入=" << shapeToString(inputShape)
+              << "，输出=" << shapeToString(outputShape) << std::endl;
+    std::cout << "[OpenVINO] 编译缓存="
+              << (config_.cacheDir.empty() ? std::string("关闭") : config_.cacheDir)
+              << "，推理线程="
               << (config_.intraOpThreads > 0 ? std::to_string(config_.intraOpThreads)
                                              : std::string("auto"))
               << std::endl;
 }
 
-cv::Mat YoloOrtDetector::letterbox(const cv::Mat &image, LetterBoxInfo &info) const
+cv::Mat YoloOpenVinoDetector::letterbox(const cv::Mat &image, LetterBoxInfo &info) const
 {
     // 等比例缩放后补灰边，推理后再反算回原图坐标。
     //
@@ -84,7 +135,7 @@ cv::Mat YoloOrtDetector::letterbox(const cv::Mat &image, LetterBoxInfo &info) co
     return out;
 }
 
-std::vector<Detection> YoloOrtDetector::infer(const cv::Mat &frame)
+std::vector<Detection> YoloOpenVinoDetector::infer(const cv::Mat &frame)
 {
     if (frame.empty()) return {};
 
@@ -97,28 +148,28 @@ std::vector<Detection> YoloOrtDetector::infer(const cv::Mat &frame)
     cv::dnn::blobFromImage(input, blob, 1.0 / 255.0, cv::Size(), cv::Scalar(),
                            true, false, CV_32F);          // swapRB=true，输出NCHW float
 
-    std::array<int64_t, 4> inputShape{1, 3, config_.inputHeight, config_.inputWidth}; // NCHW
-    auto memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault); // CPU 内存
+    // 2. 把OpenCV生成的连续NCHW数据复制进OpenVINO输入张量。
+    // InferRequest在构造时创建一次，每帧只更新输入并执行，不反复加载或编译模型。
+    ov::Tensor inputTensor = inferRequest_.get_input_tensor();
+    if (inputTensor.get_element_type() != ov::element::f32 ||
+        inputTensor.get_size() != blob.total())
+        throw std::runtime_error("OpenVINO input tensor no longer matches preprocessing output");
+    std::memcpy(inputTensor.data<float>(), blob.ptr<float>(),
+                blob.total() * sizeof(float));
 
-    // CreateTensor不复制数据，所以blob必须在Run结束前保持有效。
-    Ort::Value tensor = Ort::Value::CreateTensor<float>(
-        memoryInfo, blob.ptr<float>(), blob.total(), inputShape.data(), inputShape.size());
-
-    // 2. ONNX Runtime CPU 推理。当前 Session 没有注册 CUDA Execution Provider，
-    // 因此即使机器装有 CUDA 也仍走 CPU；若要 GPU 推理，需要 CUDA 版 ORT 并显式注册 Provider。
-    // outputs[0] 一般形状是：
+    // 3. OpenVINO同步推理。输出一般形状是：
     //   [1, 12, 8400]  或 [1, 8400, 12]
     // 其中 12 = 4个框参数 + 8个类别分数。
-    auto outputs = session_.Run(Ort::RunOptions{nullptr},
-                                inputNames_.data(), &tensor, 1,          // 1 个输入
-                                outputNames_.data(), 1);                 // 1 个输出
-    const float *data = outputs[0].GetTensorData<float>();               // 获取输出数据指针
-    auto shapeInfo = outputs[0].GetTensorTypeAndShapeInfo();
-    return postprocess(data, shapeInfo.GetShape(), lb, frame.size());    // 后处理 + 坐标还原
+    inferRequest_.infer();
+    const ov::Tensor outputTensor = inferRequest_.get_output_tensor();
+    const ov::Shape outputShape = outputTensor.get_shape();
+    const std::vector<int64_t> shape(outputShape.begin(), outputShape.end());
+    return postprocess(outputTensor.data<const float>(), shape, lb, frame.size());
 }
 
-std::vector<Detection> YoloOrtDetector::postprocess(const float *data, const std::vector<int64_t> &shape,
-                                                    const LetterBoxInfo &info, const cv::Size &imageSize) const
+std::vector<Detection> YoloOpenVinoDetector::postprocess(
+    const float *data, const std::vector<int64_t> &shape,
+    const LetterBoxInfo &info, const cv::Size &imageSize) const
 {
     // 本解析器只接受 YOLOv8 检测模型的三维输出。若模型导出时内置 NMS，
     // 或导出的是分割/姿态模型，输出数量和形状不同，需要单独编写解析逻辑。
@@ -146,7 +197,7 @@ std::vector<Detection> YoloOrtDetector::postprocess(const float *data, const std
     // 本工程固定8类，所以至少需要4个框参数+8个类别分数。
     // 如果误换成分割/姿态/其他类别数模型，直接报错而不是越界读取张量。
     const int expectedChannels = 4 + static_cast<int>(kClassNames.size());
-    if (boxes <= 0 || channels < expectedChannels)
+    if (boxes <= 0 || channels != expectedChannels)
         throw std::runtime_error("unexpected YOLO output shape: channels=" +
                                  std::to_string(channels) + ", boxes=" +
                                  std::to_string(boxes));

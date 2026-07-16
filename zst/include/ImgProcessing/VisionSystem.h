@@ -3,7 +3,7 @@
 
 #include "ImgProcessing/BeanSvmClassifier.h"
 #include "ImgProcessing/TaskPlanner.h"
-#include "ImgProcessing/YoloOrtDetector.h"
+#include "ImgProcessing/YoloOpenVinoDetector.h"
 #include <memory>
 #include <opencv2/core.hpp>
 #include <string>
@@ -11,7 +11,7 @@
 
 struct VisionSystemConfig
 {
-    YoloConfig yolo;            // YOLO ONNX 推理参数：模型路径、输入尺寸、阈值
+    YoloConfig yolo;            // YOLO OpenVINO推理参数：模型、设备、缓存、尺寸和阈值
     std::string svmPath;        // SVM 模型文件路径（bean_svm.yml）
     bool useSvm = true;         // 是否启用 SVM 豆子复核
     PlannerConfig planner;      // 任务规划器参数：稳定帧数
@@ -42,7 +42,7 @@ private:
                     const VisionDecision &decision) const;
 
     VisionSystemConfig config_;                 // 视觉系统配置的只读副本
-    YoloOrtDetector yolo_;                     // YOLO ONNX 推理器
+    YoloOpenVinoDetector yolo_;                // OpenVINO直接加载ONNX的YOLO推理器
     std::unique_ptr<BeanSvmClassifier> svm_;   // SVM 分类器，可能为空（未启用时）
     TaskPlanner planner_;                      // 比赛规则决策器
 };

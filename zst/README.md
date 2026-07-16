@@ -6,7 +6,7 @@ CMD/DATA封装、CRC和Linux串口，并给出推荐源码阅读路线。
 本工程参考桌面 `26new飞镖` 的代码组织方式：
 
 - `CameraDriver`：工业相机封装。
-- `ImgProcessing`：YOLO ONNX Runtime、SVM、任务规划。
+- `ImgProcessing`：YOLO OpenVINO、SVM、任务规划。
 - `Communication`：串口通信框架。
 - `Tool`：配置和工具函数。
 - `config`：运行参数。
@@ -15,7 +15,7 @@ CMD/DATA封装、CRC和Linux串口，并给出推荐源码阅读路线。
 
 ```text
 MindVision工业相机
--> ONNX Runtime CPU 推理 YOLO
+-> OpenVINO直接加载best5.onnx并在Intel设备上推理YOLO
 -> SVM 复核豆子 ROI
 -> 根据规则生成视觉决策
 -> 串口框架发送给电控
@@ -24,13 +24,14 @@ MindVision工业相机
 ## YOLOv8 推理数据流
 
 本工程不在 C++ 中直接加载 `.pt`，而是加载由 Ultralytics YOLOv8 导出的
-`best.onnx`。一帧图像的处理顺序如下：
+`best5.onnx`。不需要先转换成OpenVINO的`.xml/.bin`，OpenVINO可以直接读取ONNX。
+一帧图像的处理顺序如下：
 
 ```text
 相机 BGR 原图
 -> 等比例缩放并补 114 灰边（letterbox）
 -> BGR 转 RGB、像素归一化到 0~1、HWC 转 CHW
--> ONNX Runtime 输入 [1, 3, 640, 640]
+-> OpenVINO输入 [1, 3, 640, 640]
 -> 解析 [1, 12, 8400] / [1, 8400, 12]
 -> 置信度过滤
 -> 坐标从 letterbox 画布还原到相机原图
@@ -40,7 +41,28 @@ MindVision工业相机
 
 本项目的 12 个输出通道为 `4 个框参数 + 8 个类别分数`。8 个类别的顺序必须
 与训练数据集 YAML 中的 `names` 完全一致：黄豆、绿豆、白芸豆、数字 1~5。
-当前 ONNX Runtime 会话使用 CPU；安装 CUDA 本身不会自动让这里切换到 GPU。
+`model.device: AUTO`会让OpenVINO选择当前NUC上可用的Intel CPU/GPU/NPU；如果只想
+使用CPU，可改成`CPU`。首次运行会把设备编译结果写入`runtime/openvino_cache`，
+后续运行在模型、设备和OpenVINO版本不变时直接复用缓存，因此模型载入会更快。
+
+程序启动时会打印`best5.onnx`的真实输入/输出形状，并严格检查单输入、单输出、
+float32和`[1,3,640,640]`。如果换错模型，会在初始化阶段明确报错，不会继续越界解析。
+
+### debug模式识别与发送日志
+
+把`runtime.mode`改为`debug`后，相机会直接打开，并增加以下调试信息：
+
+```text
+[Debug识别] 当前帧从左到右=[数字2 conf=0.93 centerX=118 | ...]
+[数字角度核对] 数量达标，从左到右=2(...) -> 4(...) -> 5(...) -> 1(...)
+[数字推断] place5不可见，15-前四个数字之和=3，已写入place5
+[Debug最终推断] 数字布局=[place1=2, place2=4, place3=5, place4=1, place5=3]
+[Debug待发送] CMD=0x21，DATA(十进制)=[2 4 5 1 3]
+[Serial] TX A6 21 02 04 05 01 03 CRC_L CRC_H
+```
+
+当前帧日志只有在类别或左右顺序发生变化时才重新打印，避免每帧刷屏。窗口同时显示
+`YOLO L-R`和`FINAL P1-P5`；正式排序仍由多帧平均X完成，单帧debug行不直接写缓存。
 
 ## 两队双向通信与识别结果协议
 
@@ -260,8 +282,10 @@ TeamB 消息顺序：
 
 ### A/B组豆子排序规则
 
-- A组保持原逻辑：一个画面中有多个稳定豆子时，根据检测框中心X坐标从左到右
-  排序并保存。
+- A组采用整批原子保存：同一帧同类重复框只取置信度最高者，每类每帧最多计票一次；
+  必须黄豆、绿豆、白芸豆三类都达到稳定命中阈值，才依据各自多帧平均中心X从左到右
+  排序，并一次性写入`beanPlaces[0..2]`。如果本轮只有1或2类稳定，则一个也不保存，
+  清空临时投票后继续完整识别，避免跨轮追加导致物理左右顺序错误。
 - B组不使用从左到右排序：从画面中的所有豆子里选择距离画面中心最近的一个，
   只要它位于配置的中心区域内，就允许参加多帧投票，类型顺序不固定。
 - B组其余豆子完全忽略，不写入 `beanPlaces`，也不标记为已经识别；以后它们移动到
@@ -270,6 +294,18 @@ TeamB 消息顺序：
   越过它选择旁边未识别的豆子；需要让新的豆子真正移动到中心后再识别。
 - 若20帧投票期间中心类别有抖动，只取出现次数最多的类别；第一名并列时本轮不发送。
   若第一名已经记忆，也不发送，不会退而选择票数第二的类别。
+
+两组每轮稳定投票都会输出候选和正式保存日志，识别候选不等于已经保存：
+
+```text
+[A组豆子核对] 稳定候选=绿豆(...) | 黄豆(...) | 白芸豆(...)
+[A组豆子排序] 三类均已稳定，从左到右=绿豆(...) -> 黄豆(...) -> 白芸豆(...)
+[A组豆子保存] 新增=3，正式缓存=[位置1=绿豆(编码2) | 位置2=黄豆(编码1) | ...]
+
+[B组中心豆子核对] 稳定候选=黄豆(...)
+[B组中心豆子识别] 最终确认=黄豆，命中=...，平均X=...
+[B组豆子保存] 新增=1，正式缓存=[位置1=黄豆(编码1)]，完成=否
+```
 
 中心区域由 `config/vision.yaml` 配置：
 
@@ -462,14 +498,21 @@ sudo apt update
 sudo apt install -y build-essential cmake libopencv-dev libyaml-cpp-dev
 ```
 
+还需要安装OpenVINO开发包。若使用Intel官方安装目录，每次打开新终端后先载入环境：
+
+```bash
+source /opt/intel/openvino/setupvars.sh
+```
+
+如果实际安装位置不同，请把上面的路径换成真实`setupvars.sh`路径。该脚本会设置
+`OpenVINO_DIR`和运行库路径，使CMake能够找到`openvino/openvino.hpp`及
+`openvino::runtime`。
+
 NUC目录示例（用户名和安装位置可以任意）：
 
 ```text
 /任意目录/
   zst/                              # 本项目
-  onnxruntime-linux-x64-版本号/       # ONNX Runtime根目录
-    include/onnxruntime_cxx_api.h
-    lib/libonnxruntime.so
   linuxSDK_版本号/                    # MindVision Linux SDK根目录
     include/CameraApi.h
     lib/x64/libMVSDK.so
@@ -484,21 +527,20 @@ cmake ..
 make -j
 ```
 
-推荐在NUC首次配置时明确指定两个依赖根目录。路径只保存在build的CMake缓存中，
+推荐在NUC首次配置时明确指定相机SDK根目录。路径只保存在build的CMake缓存中，
 不会写死进源码：
 
 ```bash
 cmake .. \
-  -DONNXRUNTIME_ROOT=/你的/onnxruntime-linux-x64-1.27.0 \
   -DMINDVISION_ROOT=/你的/linuxSDK_V2.1.0.49202602041120
 ```
 
-也可以使用环境变量：
+如果没有执行`setupvars.sh`，也可以显式给出OpenVINO的CMake配置目录：
 
 ```bash
-export ONNXRUNTIME_ROOT=/实际路径/onnxruntime-linux-x64-版本号
-export MINDVISION_ROOT=/实际路径/linuxSDK_版本号
-cmake ..
+cmake .. \
+  -DOpenVINO_DIR=/实际路径/openvino/runtime/cmake \
+  -DMINDVISION_ROOT=/实际路径/linuxSDK_版本号
 ```
 
 源码中的项目头文件全部使用相对包含，例如：
@@ -506,7 +548,7 @@ cmake ..
 ```cpp
 #include "ImgProcessing/VisionSystem.h"
 #include "Communication/VirtualSerial.h"
-#include <onnxruntime_cxx_api.h>
+#include <openvino/openvino.hpp>
 #include <CameraApi.h>
 ```
 
@@ -517,7 +559,7 @@ cd /你的/zst
 rm -rf build
 mkdir build && cd build
 cmake .. \
-  -DONNXRUNTIME_ROOT=/实际路径/onnxruntime根目录 \
+  -DOpenVINO_DIR=/实际路径/openvino/runtime/cmake \
   -DMINDVISION_ROOT=/实际路径/MindVision-SDK根目录
 make -j"$(nproc)"
 ```

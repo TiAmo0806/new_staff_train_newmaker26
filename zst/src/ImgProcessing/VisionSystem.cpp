@@ -32,7 +32,7 @@ VisionFrameResult VisionSystem::process(const cv::Mat &frame)
 
     // 主识别：YOLO 找豆子和数字箱。
     // YOLO 是主模型，负责定位所有目标。
-    result.detections = yolo_.infer(frame);             // ONNX Runtime CPU 推理
+    result.detections = yolo_.infer(frame);             // OpenVINO CPU/AUTO设备推理
 
     // 辅助识别：SVM 只复核豆子类别。
     // 如果 SVM 和 YOLO 判断不同，这里会把豆子 label 改成 SVM 结果。

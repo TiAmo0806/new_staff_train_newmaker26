@@ -1,1 +1,3 @@
 zst/
+build/
+runtime/openvino_cache/
