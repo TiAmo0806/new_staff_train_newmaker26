@@ -35,14 +35,23 @@ static uint32_t g_bk_pulse_times[BK_PULSE_MAX];
 static uint8_t  g_bk_pulse_cnt;
 
 /*=================================================================
- * 反光通道 — 检测小断点 / 下断点
+ * 反光通道 — 检测小断点 / 下断点 / 双白横条(||)
  *
  * 基于活跃传感器的 is_reflective 标志
- * 状态: 0=IDLE 1=IN_REFL
+ * 脉冲状态机 (和黑通道平行):
+ *   IDLE(0) → IN_REFL(1) → JUST_LEFT(2) → 窗口超时→评估→IDLE
+ *   单脉冲: REFL_SINGLE / REFL_LARGE
+ *   双脉冲: ROAD_WHITE_DOUBLE (双白横条||)
  *=================================================================*/
-static uint8_t  g_rf_state;            /* 0=IDLE 1=IN_REFL */
+#define RF_PULSE_MAX            4
+
+static uint8_t  g_rf_state;            /* 0=IDLE 1=IN_REFL 2=JUST_LEFT */
 static uint32_t g_rf_enter;
 static uint32_t g_rf_leave;
+
+/* 双脉冲记录 (双白横条||) */
+static uint32_t g_rf_pulse_times[RF_PULSE_MAX];
+static uint8_t  g_rf_pulse_cnt;
 
 /*=================================================================
  * 脱线
@@ -91,6 +100,8 @@ static void reset_all(void)
     memset(g_bk_pulse_times, 0, sizeof(g_bk_pulse_times));
     g_bk_pulse_cnt = 0;
     g_rf_state = 0;   g_rf_enter = 0;  g_rf_leave = 0;
+    memset(g_rf_pulse_times, 0, sizeof(g_rf_pulse_times));
+    g_rf_pulse_cnt = 0;
     g_lost_tick = 0;
 }
 
@@ -115,15 +126,17 @@ void LineFollow_Init(void)
            (double)KP_FORWARD, (double)KD_FORWARD,
            BASE_SPEED_FORWARD_RPM, MAX_CORRECTION_RPM);
     printf("[LF]   UP: black >%lums | T: black %lu~%lums\r\n",
-           (unsigned long)REFL_LARGE_MIN_MS,
-           (unsigned long)T_JUNCTION_MIN_MS,
-           (unsigned long)T_JUNCTION_MAX_MS);
+           (unsigned long)BK_LARGE_MIN_MS,
+           (unsigned long)BK_T_JUNCTION_MIN_MS,
+           (unsigned long)BK_T_JUNCTION_MAX_MS);
     printf("[LF]   Bean||: 2×black pulse <%lums\r\n",
-           (unsigned long)REFL_PULSE_WINDOW_MS);
+           (unsigned long)RF_DOUBLE_WINDOW_MS);
     printf("[LF]   Stop: refl %lu~%lums | LO: refl >%lums\r\n",
-           (unsigned long)REFL_SINGLE_MIN_MS,
-           (unsigned long)REFL_SINGLE_MAX_MS,
-           (unsigned long)REFL_LARGE_MIN_MS);
+           (unsigned long)RF_SINGLE_MIN_MS,
+           (unsigned long)RF_SINGLE_MAX_MS,
+           (unsigned long)RF_LARGE_MIN_MS);
+    printf("[LF]   White||: 2×refl pulse <%lums\r\n",
+           (unsigned long)RF_DOUBLE_WINDOW_MS);
 #endif
 }
 
@@ -237,8 +250,8 @@ evaluate_black:
         }
 #endif
 
-        /* ── 大面积黑: >500ms → 上断点 ── */
-        if (dur >= REFL_LARGE_MIN_MS) {
+        /* ── 大面积黑: >BK_LARGE_MIN_MS → 上断点 ── */
+        if (dur >= BK_LARGE_MIN_MS) {
             fea = ROAD_UPPER_CHECK;
         }
         /* ── T形路口: 250~800ms ── */
@@ -266,46 +279,116 @@ evaluate_black:
 after_black:
 
     /*=================================================================
-     * 通道2: 反光检测
+     * 通道2: 反光检测 (脉冲状态机)
      *
-     * IDLE(0) → is_reflective→IN_REFL(1) → !is_reflective→评估→IDLE
+     * IDLE(0) → is_rf→IN_REFL(1) → !is_rf→JUST_LEFT(2)
+     *   → 窗口超时→评估→IDLE
+     *   → 再次is_rf→记录脉冲→IN_REFL→...
+     *
+     * 单脉冲: REFL_SINGLE / REFL_LARGE
+     * 双脉冲: ROAD_WHITE_DOUBLE (双白横条||)
      *=================================================================*/
-    if (is_rf) {
-        if (g_rf_state == 0) {
+    switch (g_rf_state) {
+
+    case 0: /* IDLE — 等待进入反光区 */
+        if (is_rf) {
             g_rf_state = 1;
             g_rf_enter = now;
         }
-    } else {
-        if (g_rf_state == 1) {
+        break;
+
+    case 1: /* IN_REFL — 持续反光中 */
+        if (!is_rf) {
+            g_rf_state = 2;
             g_rf_leave = now;
-            uint32_t dur = g_rf_leave - g_rf_enter;
-
-            /* 大面积反光: >400ms → 下断点 */
-            if (dur >= REFL_LARGE_MIN_MS) {
-                fea = ROAD_REFL_LARGE;
+            /* 记录脉冲 */
+            if (g_rf_pulse_cnt < RF_PULSE_MAX) {
+                g_rf_pulse_times[g_rf_pulse_cnt++] = now;
             }
-            /* 小断点: 10~200ms */
-            else if (dur >= REFL_SINGLE_MIN_MS && dur <= REFL_SINGLE_MAX_MS) {
-                if (fea == ROAD_NORMAL) {
-                    fea = ROAD_REFL_SINGLE;
-                }
-            }
-
-            g_rf_state = 0;
         }
+        break;
+
+    case 2: /* JUST_LEFT — 已离开反光, 等窗口关闭或再次进入 */
+        if (is_rf) {
+            /* 再次进入反光 → 双脉冲候选 */
+            g_rf_state = 1;
+            g_rf_enter = now;
+        } else {
+            uint32_t elapsed = now - g_rf_leave;
+            if (elapsed > REFL_PULSE_WINDOW_MS) {
+                /* 窗口超时 → 最终评估 */
+                goto evaluate_reflective;
+            }
+        }
+        break;
     }
+
+    goto after_reflective;
+
+evaluate_reflective:
+    {
+        uint32_t dur = (g_rf_leave > g_rf_enter)
+            ? (g_rf_leave - g_rf_enter) : 0;
+
+#if DEBUG_ENABLE
+        if (g_rf_pulse_cnt >= 2) {
+            printf("[LF] REFL: %d pulses, dur=%lums\r\n",
+                   g_rf_pulse_cnt, (unsigned long)dur);
+        }
+#endif
+
+        /* ── 双白横条(||): 优先判断, 2次脉冲在窗口内 ── */
+        if (g_rf_pulse_cnt >= 2) {
+            uint32_t window_elapsed = now - g_rf_pulse_times[0];
+            if (window_elapsed <= RF_DOUBLE_WINDOW_MS) {
+                fea = ROAD_WHITE_DOUBLE;
+#if DEBUG_ENABLE
+                printf("[LF] ★★ WHITE|| (2 pulses in %lums) ★★\r\n",
+                       (unsigned long)window_elapsed);
+#endif
+                goto rf_done;
+            }
+        }
+
+        /* ── 大面积反光: >RF_LARGE_MIN_MS → 下断点 ── */
+        if (dur >= RF_LARGE_MIN_MS) {
+            fea = ROAD_REFL_LARGE;
+        }
+        /* ── 小断点: 30~400ms ── */
+        else if (dur >= RF_SINGLE_MIN_MS && dur <= RF_SINGLE_MAX_MS) {
+            if (fea == ROAD_NORMAL) {
+                fea = ROAD_REFL_SINGLE;
+            }
+        }
+
+rf_done:
+        /* 重置反光通道 */
+        g_rf_state = 0;
+        g_rf_pulse_cnt = 0;
+        memset(g_rf_pulse_times, 0, sizeof(g_rf_pulse_times));
+    }
+
+after_reflective:
 
     /*=================================================================
      * 脱线检测
+     *
+     *   传感器全白 (raw >= WHITE_THRESHOLD) 且非反光 → 离线路面
+     *   传感器在边沿 (BLACK<raw<WHITE) → 正常循迹, 清零计数
+     *   传感器在反光区 → 特殊标记, 清零计数
      *=================================================================*/
-    if (!is_bk && !is_rf) {
-        /* 在白区, 累计脱线tick */
+    if (is_bk || is_rf) {
+        /* 黑区或反光区: 在标记上 */
+        g_lost_tick = 0;
+    } else if (raw_val >= WHITE_THRESHOLD) {
+        /* 全白路面: 脱线累计 */
         g_lost_tick++;
         if (g_lost_tick >= (LOST_LINE_TIMEOUT_MS / SYSTICK_PERIOD_MS)) {
             fea = ROAD_LOST_LINE;
             g_lost_tick = 0;
         }
     } else {
+        /* 边沿跟踪区 (BLACK<raw<WHITE): 正常循迹, 保持计数为零 */
         g_lost_tick = 0;
     }
 
@@ -551,6 +634,16 @@ uint8_t LineFollow_PollReflPulse(void)
 float    LineFollow_GetError(void)       { return g_lf.pid.last_error; }
 int16_t  LineFollow_GetCorrection(void)  { return g_lf.pid.correction; }
 
+uint8_t LineFollow_IsMovingBackward(void)
+{
+    return (g_lf.direction == DIR_BACKWARD) ? 1 : 0;
+}
+
+ActiveSensor_t LineFollow_GetActiveSensor(void)
+{
+    return g_lf.active_sensor;
+}
+
 const char* LineFollow_FeatureName(RoadFeature_t f)
 {
     switch (f) {
@@ -561,6 +654,7 @@ const char* LineFollow_FeatureName(RoadFeature_t f)
         case ROAD_BLACK_DOUBLE: return "BLACKx2";
         case ROAD_REFL_LARGE:   return "REFL_BIG";
         case ROAD_LOST_LINE:    return "LOST";
+        case ROAD_WHITE_DOUBLE: return "WHITEx2";
         default:                return "?";
     }
 }
