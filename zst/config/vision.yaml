@@ -16,7 +16,7 @@ model:
   intra_op_threads: 0                   # 0=OpenVINO自动选择；也可试2/4比较实际效果
   confidence: 0.35                      # 类别置信度阈值：越高误检越少、漏检可能越多
   nms_iou: 0.20                         # 同类框 NMS IoU 阈值：越低去重越严格
-  use_svm: true                         # 是否用 SVM 覆盖 YOLO 给出的豆子类别
+  use_svm: false                         # 是否用 SVM 覆盖 YOLO 给出的豆子类别
 
 serial:
   port: "/dev/ttyACM0"                 # STM32 CDC 常见为 ttyACM，USB转串口常见为 ttyUSB
@@ -36,14 +36,15 @@ workflow:
   digits_per_view: 4                   # A/B共用：每角度先凑齐4个稳定新数字，再按平均X从左到右整批保存
   infer_place5_from_first_four: true   # 相机固定只看place1~4；排序保存4个后，用15减去数字总和推断place5
   team_b_center_width_ratio: 0.40      # 仅B组：只接受画面横向中间40%的豆子，A组不受影响
-  resume_progress: true                # 结果生成并准备发送后保存断点；重启程序从下一阶段继续
-  progress_file: "runtime/workflow_progress.txt" # 相对zst根目录；新比赛按R清空
+  clear_progress_on_start: true        # 每次启动自动删除上场断点；相机0/1开关不会清理当前内存
+  resume_progress: true                # 仍保存本场断点；只有把上一项临时改false时才允许启动恢复
+  progress_file: "runtime/workflow_progress.txt" # 自动清理正式文件及可能残留的.tmp临时文件
 
 runtime:
   # competition：比赛模式，启动后等待电控camera_state=1才打开相机。
   # debug：日常调试模式，程序启动后直接打开相机，并忽略电控camera_state开关命令。
   # 没接电控进行日常调试时，保持 serial.simulated: true，只打印发送帧而不访问硬件。
-  mode: "competition"
+  mode: "debug"
   show_window: true
   save_video: false
   log_dir: "logs"

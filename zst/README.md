@@ -430,53 +430,51 @@ camera:
 连续取帧失败达到阈值后，程序会自动关闭并重新打开相机。失败期间仍处理
 `cv::waitKey()`，因此窗口不会再因为取帧失败而完全无响应，仍可按 `q` 或 `ESC`退出。
 
-### 关闭程序后的断点续跑
+### 启动自动清理旧断点
 
 只关闭或断开相机、但不退出程序时，工作流状态仍保存在内存中：例如A组豆子已经
-识别完成，重新打开相机后会继续等待数字。若使用 `q`、`ESC` 或强制停止使程序
-完全退出，内存会消失，因此程序还会把已完成阶段写入磁盘：
+识别完成，收到`camera_state=0`关闭相机后串口和程序仍运行；再次收到
+`camera_state=1`时会继续等待数字，不会清理当前比赛结果。
+
+为了避免新比赛忘按`R`而恢复上场数据，默认每次完整启动程序都会自动删除正式断点
+和可能残留的`.tmp`临时文件，然后从空状态开始：
 
 ```yaml
 workflow:
+  clear_progress_on_start: true
   resume_progress: true
   progress_file: "runtime/workflow_progress.txt"
 ```
 
-断点在A组豆子阶段完成、各发送阶段生成结果后保存。默认进度文件位于项目根目录下的
-`runtime/workflow_progress.txt`。A组新流程使用断点`version 3`；发现旧A组version 1/2
-断点时会从头开始，防止把“先数字后豆子”的旧数据误恢复到新流程。
-
-A组示例：
+正常启动日志如下：
 
 ```text
-识别3个豆子并保存黄/绿/白各自位置
-    -> 保存 waiting_digits（此时不发送）
-    -> 关闭程序/相机
-    -> 再次启动
-    -> 自动恢复 waiting_digits
-    -> 识别5个数字并一次发送6字节最终位置结果
+[断点管理] 启动策略=自动清理，不加载上场比赛进度
+[断点管理] 已自动删除旧文件: .../runtime/workflow_progress.txt
+[Workflow] 从头开始, mode=team_a
 ```
 
-B组也按相同方式保存阶段：第一个中心豆子发送后恢复到 `waiting_digits`；5个数字
-发送后恢复到 `waiting_remaining_beans`，之后继续识别尚未记录的中心豆子。原来的
-比赛顺序仍然保留，避免取消顺序后重复发送或把豆子发到错误阶段。
+程序仍会保存本场断点，但下一次启动默认先删除，不会读取。如果比赛中途程序异常退出，
+并且明确需要恢复当前比赛，可在重启前临时改成：
 
-正常恢复时，启动日志应出现类似内容：
-
-```text
-[WorkflowResume] 已恢复: mode=team_a, stage=waiting_digits, 豆子=3/3, 箱位=0/5
+```yaml
+workflow:
+  clear_progress_on_start: false
+  resume_progress: true
 ```
 
-开始一场全新的比赛时必须清除上一场记录。在图像窗口激活时按 `R`，程序会同时
-清空内存和进度文件；若关闭了图像窗口，也可以在程序停止后执行：
+恢复完成后，下场比赛前必须重新改回`true`。键盘`R`仍然保留，可在程序运行期间
+手动立即清空当前内存、正式断点和`.tmp`文件，但正常新比赛已经不需要依赖按`R`。
+
+如果只想在程序停止时手工清理，也可以执行下面命令；默认自动策略下通常不需要：
 
 ```bash
-rm -f ~/zst/runtime/workflow_progress.txt
+rm -f ~/zst/runtime/workflow_progress.txt ~/zst/runtime/workflow_progress.txt.tmp
 ```
 
 注意：`serial.simulated: true`时没有真实C板，程序只打印完整发送帧，不访问串口；
 无ACK状态机会正常继续并保存断点。
-正式比赛前请按`R`或删除进度文件，并把`simulated`改为`false`。
+正式比赛只需确认`clear_progress_on_start: true`和`simulated: false`。
 
 为得到稳定帧率，比赛现场建议固定曝光，例如：
 

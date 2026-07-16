@@ -82,10 +82,22 @@ CompetitionWorkflow::CompetitionWorkflow(const CompetitionWorkflowConfig &config
     config_.teamBCenterWidthRatio =
         std::clamp(config_.teamBCenterWidthRatio, 0.05f, 1.0f);
 
-    // 构造时不能调用公开reset()，因为reset()会删除磁盘断点。
-    // 先初始化干净内存，再尝试恢复上次已经生成并发送的比赛进度。
+    // 构造时先建立空内存。比赛默认每次启动自动删除上场断点，避免忘按R后
+    // 从旧阶段继续；只有明确关闭clearProgressOnStart时才允许尝试恢复。
     resetMemory();
-    if (!loadProgress())
+    bool restored = false;
+    if (config_.clearProgressOnStart)
+    {
+        std::cout << "[断点管理] 启动策略=自动清理，不加载上场比赛进度" << std::endl;
+        clearProgressFile();
+    }
+    else
+    {
+        std::cout << "[断点管理] 启动策略=允许恢复，将检查断点文件" << std::endl;
+        restored = loadProgress();
+    }
+
+    if (!restored)
     {
         std::cout << "[Workflow] 从头开始, mode=" << teamModeToString(config_.mode);
         if (config_.mode == TeamMode::TeamB)
@@ -353,15 +365,42 @@ bool CompetitionWorkflow::saveProgress() const
 
 void CompetitionWorkflow::clearProgressFile() const
 {
-    if (config_.progressFile.empty()) return;
-    std::error_code ec;
-    const bool removed = std::filesystem::remove(config_.progressFile, ec);
-    if (ec)
-        std::cerr << "[WorkflowResume] 删除进度文件失败: "
-                  << config_.progressFile << std::endl;
-    else if (removed)
-        std::cout << "[WorkflowResume] 已删除旧进度: "
-                  << config_.progressFile << std::endl;
+    namespace fs = std::filesystem;
+    if (config_.progressFile.empty())
+    {
+        std::cout << "[断点管理] progress_file为空，无需清理" << std::endl;
+        return;
+    }
+
+    // saveProgress采用“先写.tmp，再替换正式文件”。异常断电可能留下临时文件，
+    // 新比赛启动时两者都删除，确保目录中没有任何上场未完成数据。
+    const fs::path target(config_.progressFile);
+    fs::path temporary = target;
+    temporary += ".tmp";
+
+    bool removedAnything = false;
+    bool removalFailed = false;
+    for (const fs::path &path : {target, temporary})
+    {
+        std::error_code ec;
+        const bool removed = fs::remove(path, ec);
+        if (ec)
+        {
+            removalFailed = true;
+            std::cerr << "[断点管理] 删除失败: " << path.string()
+                      << "，原因=" << ec.message()
+                      << "；本次仍从空内存开始且不会加载该文件" << std::endl;
+        }
+        else if (removed)
+        {
+            removedAnything = true;
+            std::cout << "[断点管理] 已自动删除旧文件: " << path.string()
+                      << std::endl;
+        }
+    }
+
+    if (!removedAnything && !removalFailed)
+        std::cout << "[断点管理] 未发现旧断点，本场直接从头开始" << std::endl;
 }
 
 void CompetitionWorkflow::switchMode(TeamMode mode)

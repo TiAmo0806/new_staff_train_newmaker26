@@ -164,7 +164,12 @@ std::vector<Detection> YoloOpenVinoDetector::infer(const cv::Mat &frame)
     const ov::Tensor outputTensor = inferRequest_.get_output_tensor();
     const ov::Shape outputShape = outputTensor.get_shape();
     const std::vector<int64_t> shape(outputShape.begin(), outputShape.end());
-    return postprocess(outputTensor.data<const float>(), shape, lb, frame.size());
+
+    // outputTensor本身是const，因此取出的指针只能用于只读后处理。
+    // OpenVINO 2025仍允许data<const float>()，但该模板写法已经弃用；
+    // 使用data<float>()并赋给const float*同时兼容当前版本和2026.0新返回类型。
+    const float *outputData = outputTensor.data<float>();
+    return postprocess(outputData, shape, lb, frame.size());
 }
 
 std::vector<Detection> YoloOpenVinoDetector::postprocess(

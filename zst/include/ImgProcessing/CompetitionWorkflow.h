@@ -18,6 +18,11 @@ struct CompetitionWorkflowConfig
     // 无ACK模式下，稳定结果生成并准备发送后立即推进阶段并保存断点。
     // 这只能保证视觉端重启后续跑，不能证明电控已经实际收到数据。
     bool resumeProgress = true;
+
+    // true（比赛默认）：程序每次启动都删除上场断点并从空状态开始，避免忘按R。
+    // 同一进程内camera_state=0/1关闭和重开相机不会触发清理，当前比赛内存仍保留。
+    // 若比赛中途程序崩溃且确实需要恢复，可临时改成false后重启一次。
+    bool clearProgressOnStart = true;
     std::string progressFile = "runtime/workflow_progress.txt";
 };
 

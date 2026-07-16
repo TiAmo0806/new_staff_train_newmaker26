@@ -173,6 +173,9 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
                     w["team_b_center_width_ratio"].as<float>();
             if (w["resume_progress"])
                 config.workflow.resumeProgress = w["resume_progress"].as<bool>();
+            if (w["clear_progress_on_start"])
+                config.workflow.clearProgressOnStart =
+                    w["clear_progress_on_start"].as<bool>();
             if (w["progress_file"])
                 config.workflow.progressFile = w["progress_file"].as<std::string>();
         }
