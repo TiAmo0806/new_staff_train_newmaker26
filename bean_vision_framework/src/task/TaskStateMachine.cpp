@@ -406,7 +406,9 @@ bool TaskStateMachine::handleArriveBean(const std::string& image_path,
 
     VisionResult result;
     if (!runner_.scanBeans(result)) {
-        std::cout << "[WARN] bean recognition runner failed\n";
+        std::cout << "[RECOGNITION][BEAN][FAILED] reason=" << result.reason
+                  << " bean_bind_sent=false"
+                  << " action=wait_for_arrive_bean\n";
         setState(TaskState::WAIT_BEAN_COMMAND);
         return true;
     }
@@ -442,7 +444,10 @@ bool TaskStateMachine::handleArriveDigit(const std::string& image_path,
 
     VisionResult result;
     if (!runner_.scanDigits(result)) {
-        std::cout << "[ERROR] digit recognition runner failed\n";
+        std::cout << "[RECOGNITION][DIGIT][FAILED] reason=" << result.reason
+                  << " final_task_sent=false"
+                  << " bean_binding=preserved"
+                  << " action=wait_for_arrive_digit\n";
         setState(TaskState::WAIT_DIGIT_COMMAND);
         return true;
     }
