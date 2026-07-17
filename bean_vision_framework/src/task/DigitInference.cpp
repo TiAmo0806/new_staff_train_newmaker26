@@ -5,6 +5,12 @@
 
 namespace {
 
+struct DigitSetAnalysis {
+    bool all_in_range = true;
+    bool unique = true;
+    std::set<int> seen_digits;
+};
+
 int digitValue(const PositionResult& position) {
     if (!position.valid) {
         return 0;
@@ -25,6 +31,32 @@ int digitValue(const PositionResult& position) {
         return 5;
     }
     return 0;
+}
+
+DigitSetAnalysis analyzeDigitSet(const std::map<int, int>& place_to_digit) {
+    DigitSetAnalysis analysis;
+    for (const auto& [place_id, digit] : place_to_digit) {
+        (void)place_id;
+        if (digit < 1 || digit > 5) {
+            analysis.all_in_range = false;
+        }
+        if (!analysis.seen_digits.insert(digit).second) {
+            analysis.unique = false;
+        }
+    }
+    return analysis;
+}
+
+bool isCompleteDigitPermutation(const std::map<int, int>& place_to_digit) {
+    if (place_to_digit.size() != 5) {
+        return false;
+    }
+
+    const DigitSetAnalysis analysis = analyzeDigitSet(place_to_digit);
+    return analysis.all_in_range &&
+           analysis.unique &&
+           analysis.seen_digits.size() == 5 &&
+           analysis.seen_digits == std::set<int>({1, 2, 3, 4, 5});
 }
 
 }  // namespace
@@ -50,7 +82,7 @@ DigitInferenceResult DigitInference::analyze(const VisionResult& result) const {
         }
     }
 
-    if (inference.missing_places.empty()) {
+    if (inference.missing_places.empty() && isCompleteDigitPermutation(inference.place_to_digit)) {
         inference.complete = true;
         inference.reliable = true;
         inference.reason = "ok";
@@ -58,20 +90,12 @@ DigitInferenceResult DigitInference::analyze(const VisionResult& result) const {
     }
 
     if (inference.missing_places.size() == 1 && inference.place_to_digit.size() == 4) {
-        std::set<int> seen_digits;
-        bool duplicate = false;
-        for (const auto& [place_id, digit] : inference.place_to_digit) {
-            (void)place_id;
-            if (digit < 1 || digit > 5 || !seen_digits.insert(digit).second) {
-                duplicate = true;
-                break;
-            }
-        }
+        const DigitSetAnalysis analysis = analyzeDigitSet(inference.place_to_digit);
 
-        if (!duplicate) {
+        if (analysis.all_in_range && analysis.unique) {
             std::vector<int> missing_digits;
             for (int digit = 1; digit <= 5; ++digit) {
-                if (seen_digits.count(digit) == 0) {
+                if (analysis.seen_digits.count(digit) == 0) {
                     missing_digits.push_back(digit);
                 }
             }
