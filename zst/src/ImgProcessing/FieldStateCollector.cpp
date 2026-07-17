@@ -1,6 +1,7 @@
 #include "ImgProcessing/FieldStateCollector.h"
 #include <algorithm>
 #include <iostream>
+#include <sstream>
 
 namespace
 {
@@ -53,6 +54,11 @@ void FieldStateCollector::reset()
     // 清空“已经见过”的记录。
     seenBeans_ = {};
     seenDigits_ = {};
+
+    // 新比赛/切队时允许所有关键状态重新输出一次。
+    // 单纯完成一轮20帧投票不会清空这些键，从而抑制相同失败信息反复刷屏。
+    lastBeanStatusLogKey_.clear();
+    lastBoxStatusLogKey_.clear();
 
     // 清空当前角度投票桶。
     resetBeanAngle();
@@ -243,23 +249,39 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
         }
     }
 
+    // 日志去重只关心“候选类别、当前已保存数量和去重状态”，不把每轮变化的命中数、
+    // 平均X写入键。这样相同的2/3或空候选只提示一次，第三类出现时才重新打印。
+    std::ostringstream beanStatusKeyBuilder;
+    beanStatusKeyBuilder << (teamBMode ? 'B' : 'A') << ':' << nextBeanIndex_ << ':';
+    for (const CandidateStat &candidate : candidates)
+        beanStatusKeyBuilder << candidate.id << ',';
+    beanStatusKeyBuilder << "seen=";
+    for (int id = 1; id <= 3; ++id)
+        beanStatusKeyBuilder << (seenBeans_[id] ? '1' : '0');
+    const std::string beanStatusKey = beanStatusKeyBuilder.str();
+    const bool shouldLogBeanStatus = beanStatusKey != lastBeanStatusLogKey_;
+
     // 每轮投票完成都打印识别候选，A/B两组现场都能看到模型稳定识别了什么。
-    std::cout << logPrefix << " 稳定候选=";
-    if (candidates.empty())
+    // 相同候选状态连续出现时只打印第一次，避免每20帧重复刷屏。
+    if (shouldLogBeanStatus)
     {
-        std::cout << "无";
-    }
-    else
-    {
-        for (std::size_t i = 0; i < candidates.size(); ++i)
+        std::cout << logPrefix << " 稳定候选=";
+        if (candidates.empty())
         {
-            if (i != 0) std::cout << " | ";
-            std::cout << beanChineseName(candidates[i].id)
-                      << "(命中=" << candidates[i].count
-                      << ",平均X=" << candidates[i].averageX() << ')';
+            std::cout << "无";
         }
+        else
+        {
+            for (std::size_t i = 0; i < candidates.size(); ++i)
+            {
+                if (i != 0) std::cout << " | ";
+                std::cout << beanChineseName(candidates[i].id)
+                          << "(命中=" << candidates[i].count
+                          << ",平均X=" << candidates[i].averageX() << ')';
+            }
+        }
+        std::cout << std::endl;
     }
-    std::cout << std::endl;
 
     if (teamBMode)
     {
@@ -274,14 +296,15 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
         // 第一名并列说明中心目标在本轮不稳定，宁可继续观察，也不猜测并误发。
         if (candidates.size() > 1 && candidates[0].count == candidates[1].count)
         {
-            std::cout << "[B组中心豆子核对] 最高票并列，中心类别不稳定，本轮不保存"
-                      << std::endl;
+            if (shouldLogBeanStatus)
+                std::cout << "[B组中心豆子核对] 最高票并列，中心类别不稳定，本轮不保存"
+                          << std::endl;
             candidates.clear();
         }
         else if (candidates.size() > 1)
             candidates.resize(1);
 
-        if (!candidates.empty())
+        if (!candidates.empty() && shouldLogBeanStatus)
         {
             std::cout << "[B组中心豆子识别] 最终确认="
                       << beanChineseName(candidates[0].id)
@@ -300,9 +323,11 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
             std::min(std::max(1, config_.minNewBeansPerCommit), remainingCapacity);
         if (static_cast<int>(candidates.size()) < requiredCount)
         {
-            std::cout << "[A组豆子核对] 稳定新豆子=" << candidates.size()
-                      << '/' << requiredCount
-                      << "，尚未全部识别，本轮一个也不保存" << std::endl;
+            if (shouldLogBeanStatus)
+                std::cout << "[A组豆子核对] 稳定新豆子=" << candidates.size()
+                          << '/' << requiredCount
+                          << "，尚未全部识别，本轮一个也不保存" << std::endl;
+            lastBeanStatusLogKey_ = beanStatusKey;
             resetBeanAngle();
             return result;
         }
@@ -337,7 +362,7 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
         // 如果这种豆子之前已经保存过，说明这是多角度重叠识别，跳过。
         if (seenBeans_[candidate.id])
         {
-            if (teamBMode)
+            if (teamBMode && shouldLogBeanStatus)
                 std::cout << "[B组豆子保存] " << beanChineseName(candidate.id)
                           << "以前已经保存，本轮不重复保存、不重复发送" << std::endl;
             continue;                                   // 已保存过的豆子类型
@@ -374,10 +399,7 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
         }
         std::cout << "]，完成=" << (state_.beanReady ? "是" : "否") << std::endl;
     }
-    else if (candidates.empty())
-    {
-        std::cout << logPrefix << " 本轮没有可保存结果，继续采集下一轮" << std::endl;
-    }
+    lastBeanStatusLogKey_ = beanStatusKey;
 
     // 一个角度提交完后，清空临时投票，准备下一个角度。
     resetBeanAngle();
@@ -422,26 +444,40 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
     const bool candidateCountInvalid = inferPlace5ThisRound
         ? static_cast<int>(candidates.size()) != requiredCount
         : static_cast<int>(candidates.size()) < requiredCount;
+
+    // 同一阶段、同一组候选数字的失败状态只输出一次。命中数和平均X不参与去重键，
+    // 因此连续多轮“0个候选”不会每20帧刷一行；候选数字变化时才重新提醒。
+    std::ostringstream boxStatusKeyBuilder;
+    boxStatusKeyBuilder << nextBoxIndex_ << ':' << requiredCount << ':'
+                        << (inferPlace5ThisRound ? 'I' : 'N') << ':';
+    for (const CandidateStat &candidate : candidates)
+        boxStatusKeyBuilder << candidate.id << ',';
+    const std::string boxStatusKey = boxStatusKeyBuilder.str();
+    const bool shouldLogBoxStatus = boxStatusKey != lastBoxStatusLogKey_;
     if (candidateCountInvalid)
     {
-        std::cout << "[数字角度核对] 稳定新数字=" << candidates.size()
-                  << "，要求=" << (inferPlace5ThisRound ? "恰好" : "至少")
-                  << requiredCount << "，本轮不保存；候选=";
-        if (candidates.empty())
+        if (shouldLogBoxStatus)
         {
-            std::cout << "无";
-        }
-        else
-        {
-            for (size_t i = 0; i < candidates.size(); ++i)
+            std::cout << "[数字角度核对] 稳定新数字=" << candidates.size()
+                      << "，要求=" << (inferPlace5ThisRound ? "恰好" : "至少")
+                      << requiredCount << "，本轮不保存；候选=";
+            if (candidates.empty())
             {
-                if (i != 0) std::cout << ", ";
-                std::cout << candidates[i].id
-                          << "(命中=" << candidates[i].count
-                          << ",平均X=" << candidates[i].averageX() << ')';
+                std::cout << "无";
             }
+            else
+            {
+                for (size_t i = 0; i < candidates.size(); ++i)
+                {
+                    if (i != 0) std::cout << ", ";
+                    std::cout << candidates[i].id
+                              << "(命中=" << candidates[i].count
+                              << ",平均X=" << candidates[i].averageX() << ')';
+                }
+            }
+            std::cout << std::endl;
         }
-        std::cout << std::endl;
+        lastBoxStatusLogKey_ = boxStatusKey;
         resetBoxAngle();
         return result;
     }
@@ -483,6 +519,7 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
                   << ",平均X=" << candidates[i].averageX() << ')';
     }
     std::cout << std::endl;
+    lastBoxStatusLogKey_ = boxStatusKey;
 
     for (const auto &candidate : candidates)
     {

@@ -11,19 +11,16 @@
 struct YoloConfig
 {
     // YOLO训练完成后导出的ONNX模型路径，例如best5.onnx。
-    // 这里加载的不是 PyTorch 的 .pt 文件；部署时不需要 Python/Ultralytics，
-    // 只需要OpenVINO Runtime、模型文件以及与训练阶段完全一致的类别顺序。
     std::string modelPath;
 
-    // OpenVINO编译设备。AUTO会优先选择当前NUC上可用的Intel设备，
-    // 没有可用GPU/NPU插件时会自动回退CPU；也可以在YAML中固定为CPU。
-    std::string device = "AUTO";
+    // OpenVINO编译设备。
+    std::string device = "CPU";
 
     // OpenVINO模型编译缓存目录。第一次运行会编译ONNX并写入缓存，
     // 第二次及以后可复用缓存，从而显著缩短模型启动时间。
     std::string cacheDir = "runtime/openvino_cache";
 
-    // 模型输入张量的宽和高，默认对应 [1, 3, 640, 640]。
+    // 神经网络输入张量的形状，默认对应 [1, 3, 640, 640]。 [N, C, H, W]分别表示一次输入的图像数量，通道数，高度和宽度。
     // 必须与导出 ONNX 时的 imgsz 一致，否则固定尺寸模型会在 Run() 时报维度错误。
     int inputWidth = 640;
     int inputHeight = 640;
@@ -32,8 +29,7 @@ struct YoloConfig
     int intraOpThreads = 0;
 
     // 候选框最低类别置信度。小于该值的框会在 NMS 之前被直接丢弃。
-    // 调高可减少误检，调低可减少漏检，比赛现场应结合验证集和实际光照调整。
-    float confThreshold = 0.35f;
+    float confThreshold = 0.45f;
 
     // 非极大值抑制（NMS）的 IoU 阈值，只抑制“同类别”的重叠框。
     // 阈值越低，去重越严格；过低时可能把靠得很近的两个真实目标误删。

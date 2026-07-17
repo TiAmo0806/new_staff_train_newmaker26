@@ -139,7 +139,7 @@ bool MindVisionCamera::read(cv::Mat &image)
         bgrBuffer_.data()                       // 像素数据指针
     );
 
-    // main会在下一次read之前完成YOLO/SVM和调试图clone，因此这里可以直接引用复用缓存，
+    // main会在下一次read之前完成YOLO推理和调试图clone，因此这里可以直接引用复用缓存，
     // 少做一次整幅图像深拷贝。调用方不能跨越下一次read长期保存这个Mat。
     image = view;
 

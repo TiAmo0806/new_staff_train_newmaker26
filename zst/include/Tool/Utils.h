@@ -19,7 +19,7 @@ enum class AppRunMode
 struct AppConfig
 {
     CameraConfig camera;                    // 工业相机参数：曝光、增益、超时和重连
-    VisionSystemConfig vision;              // YOLO、SVM和调试规划器参数
+    VisionSystemConfig vision;              // OpenVINO YOLO和调试规划器参数
     SerialConfig serial;                    // 串口设备、波特率、模拟模式和TX日志
     CompetitionWorkflowConfig workflow;     // A/B流程、投票和断点续跑参数
     AppRunMode runMode = AppRunMode::Competition; // 默认比赛模式，避免上电后意外启动相机

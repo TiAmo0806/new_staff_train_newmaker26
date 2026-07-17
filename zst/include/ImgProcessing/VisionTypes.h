@@ -34,14 +34,14 @@ struct Detection
     //   7 data_5
     int classId = -1;               // YOLO 输出的原始类别编号，-1 表示无效
 
-    // YOLO 置信度。SVM 不提供可靠概率，所以这里只保留 YOLO 分数。
+    // YOLO最终置信度。
     float score = 0.0f;             // 置信度分数，范围 0~1
 
     // 检测框，坐标已经从 640x640 输入图还原到原始相机图像。
     cv::Rect box;                   // 检测框在原图上的像素坐标
 
-    // 显示用标签。若 SVM 复核豆子类别，会被改成 xxx_svm。
-    std::string label;              // 显示用标签，如 "soybean" 或 "soybean_svm"
+    // 显示用YOLO类别标签。
+    std::string label;              // 显示用标签，如 "soybean"
 
     // 区分这是豆子，还是数字箱。
     TargetKind kind = TargetKind::Unknown;  // 目标种类：豆子/数字箱/未知

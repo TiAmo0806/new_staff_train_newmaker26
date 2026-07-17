@@ -72,11 +72,9 @@ message(STATUS "MindVision library: ${MINDVISION_LIBRARY}")
 
 set(ALL_SOURCES
     src/CameraDriver/MindVisionCamera.cpp
-    src/Communication/ByteConverter.cpp
     src/Communication/CRC16.cpp
     src/Communication/VirtualSerial.cpp
     src/Communication/VisionProtocol.cpp
-    src/ImgProcessing/BeanSvmClassifier.cpp
     src/ImgProcessing/CompetitionWorkflow.cpp
     src/ImgProcessing/FieldStateCollector.cpp
     src/ImgProcessing/TaskPlanner.cpp

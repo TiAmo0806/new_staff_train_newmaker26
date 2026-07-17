@@ -2,7 +2,7 @@
  * @file main.cpp
  * @brief 起重机物流视觉主程序
  *   相机相关问题 -> CameraDriver/
- *   YOLO/SVM/规则判断 -> ImgProcessing/
+ *   YOLO/多帧投票/规则判断 -> ImgProcessing/
  *   串口协议 -> Communication/
  *   配置读取 -> Tool/
  */
@@ -39,46 +39,6 @@ std::vector<Detection> leftToRightDetections(const std::vector<Detection> &detec
         return a.box.x + a.box.width / 2 < b.box.x + b.box.width / 2;
     });
     return sorted;
-}
-
-// 生成不含浮点抖动的签名。只有类别或左右顺序变化时才重新打印当前帧日志，
-// 避免置信度和坐标每帧轻微变化导致终端刷屏。
-std::string detectionSignature(const std::vector<Detection> &sorted)
-{
-    std::ostringstream oss;
-    for (const Detection &d : sorted)
-    {
-        // 豆子可能被SVM覆盖类别，不能只看YOLO原始classId；否则SVM结果变化时
-        // debug日志不会刷新。数字则直接使用最终digit值。
-        const int finalValue = d.kind == TargetKind::Bean
-            ? static_cast<int>(encodeBeanType(d.bean))
-            : d.digit;
-        oss << static_cast<int>(d.kind) << ':' << finalValue << ';';
-    }
-    return oss.str();
-}
-
-// debug终端详细说明：目标类型、识别值、置信度和原图中心X。
-std::string detectionLogText(const std::vector<Detection> &sorted)
-{
-    std::ostringstream oss;
-    oss << "[Debug识别] 当前帧从左到右=";
-    if (sorted.empty()) return oss.str() + "[无有效目标]";
-
-    oss << '[';
-    for (std::size_t i = 0; i < sorted.size(); ++i)
-    {
-        if (i != 0) oss << " | ";
-        const Detection &d = sorted[i];
-        if (d.kind == TargetKind::DigitBox)
-            oss << "数字" << d.digit;
-        else
-            oss << "豆子" << beanToString(d.bean);
-        oss << " conf=" << std::fixed << std::setprecision(2) << d.score
-            << " centerX=" << (d.box.x + d.box.width / 2);
-    }
-    oss << ']';
-    return oss.str();
 }
 
 // OpenCV内置字体不能可靠显示中文，因此窗口上使用短英文；终端仍打印完整中文说明。
@@ -146,7 +106,6 @@ int main(int argc, char **argv)
     // 4. 初始化视觉系统。
     // VisionSystem 内部包含：
     //   OpenVINO直接加载best5.onnx并执行YOLO检测；
-    //   SVM 豆子二次分类；
     //   TaskPlanner 比赛规则决策。
     // 模型可以提前加载；比赛模式等待camera_state=1，调试模式会直接开始逐帧推理。
     VisionSystem vision(config.vision);                 // 创建视觉系统
@@ -210,7 +169,6 @@ int main(int argc, char **argv)
 
     int consecutiveCaptureFailures = 0;
     cv::Mat lastDebugImage;                            // 相机短暂掉线时保持窗口可响应
-    std::string lastDebugDetectionSignature = "<首次输出>"; // 第一帧即使无目标也会输出一次
     std::string lastDebugFinalLayout;                  // 最终5位数组只打印一次
 
     auto sendWorkflowResult = [&](const VisionTxPacket &packet) {
@@ -351,24 +309,18 @@ int main(int argc, char **argv)
         }
         consecutiveCaptureFailures = 0;
 
-        // 6. YOLO 检测 + SVM 复核 + 任务规划。
+        // 6. OpenVINO YOLO检测 + 任务规划。
         // result.detections：当前帧所有豆子/数字箱检测框；
         // result.decision：根据比赛规则算出的目标数字箱；
         // result.debugImage：画好框和文字的调试图。
         VisionFrameResult result = vision.process(frame); // 完整一帧视觉处理
 
-        // debug模式显示YOLO当前帧结果。正式位置仍由FieldStateCollector进行多帧投票，
-        // 不能把这一行单帧结果误认为已经保存或已经发送给电控。
+        // debug模式只在图像窗口显示当前帧YOLO结果，不再把单帧抖动持续打印到终端。
+        // 终端只保留收集器输出的多帧稳定核对、排序、缓存和最终发送结果。
         std::vector<Detection> debugSortedDetections;
         if (config.runMode == AppRunMode::Debug)
         {
             debugSortedDetections = leftToRightDetections(result.detections);
-            const std::string signature = detectionSignature(debugSortedDetections);
-            if (signature != lastDebugDetectionSignature)
-            {
-                std::cout << detectionLogText(debugSortedDetections) << std::endl;
-                lastDebugDetectionSignature = signature;
-            }
             cv::putText(result.debugImage, detectionOverlayText(debugSortedDetections),
                         cv::Point(20, 75), cv::FONT_HERSHEY_SIMPLEX, 0.65,
                         cv::Scalar(255, 255, 0), 2);

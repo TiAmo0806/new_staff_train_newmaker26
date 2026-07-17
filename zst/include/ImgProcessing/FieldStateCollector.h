@@ -4,6 +4,7 @@
 #include "ImgProcessing/FieldState.h"
 #include "ImgProcessing/VisionTypes.h"
 #include <array>
+#include <string>
 #include <vector>
 
 struct FieldStateCollectorConfig
@@ -14,8 +15,8 @@ struct FieldStateCollectorConfig
     int voteFramesPerAngle = 20;    // 每个观察角度需要累计的帧数
 
     // 某个类别在当前角度至少出现多少帧才可信。
-    // 例如 20 帧里至少出现 6 帧，才会被加入本角度结果。
-    int minHitsPerAngle = 6;        // 当前角度内最少出现次数阈值
+    // 例如 20 帧里至少出现 10 帧，才会被加入本角度结果。
+    int minHitsPerAngle = 10;        // 当前角度内最少出现次数阈值
 
     // 数字箱不能按照“第一次识别到的先后顺序”零散写入数组。
     // 每个角度必须至少凑齐这么多个稳定、未保存且互不重复的新数字，才允许把该角度
@@ -142,6 +143,11 @@ private:
     // 记录某个数字是否已经保存过。
     // 例如数字 1 在上一个角度已经保存，后续再看到 1 就跳过。
     std::array<bool, 6> seenDigits_{};
+
+    // 终端日志去重键：相同的“未凑齐/重复/无候选”状态只提示一次。
+    // 当前候选类别、已保存数量或阶段发生变化时，键随之变化，才重新输出提示。
+    std::string lastBeanStatusLogKey_;
+    std::string lastBoxStatusLogKey_;
 };
 
 #endif // FIELD_STATE_COLLECTOR_H
