@@ -49,6 +49,7 @@ private:
 
     // 重连状态（运行时）
     std::chrono::steady_clock::time_point lastReconnectAttempt_{};
+    //{}值初始化，初始值设置为0,即纪元
     int  reconnectFailCount_ = 0;
 
     // 重连阈值（由 YAML 配置注入）

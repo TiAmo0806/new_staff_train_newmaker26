@@ -7,7 +7,8 @@
 #define DETECTION_HPP_
 
 #include <opencv2/opencv.hpp>
-#include "onnxruntime-sdk/include/onnxruntime_cxx_api.h"
+#include <vector>
+#include <cstddef>
 
 // ============================================================
 //  检测结果结构体
@@ -95,44 +96,12 @@ std::vector<Detection> parseYOLOv8OutputFeatureFirst(
 );
 
 // ============================================================
-//  2b. 解析 YOLO 输出 —— 锚点在前 [anchors, classes+4]（某些第三方导出格式）
-// ============================================================
-/**
- * @param outputData             模型输出数据指针
- * @param numClasses             类别数量
- * @param numAnchors             Anchor 数量
- * @param imageWidth             原始图像宽度（用于边界裁剪）
- * @param imageHeight            原始图像高度（用于边界裁剪）
- * @param scale                  预处理时的缩放比例 (1/r)
- * @param dw                     预处理时的水平填充
- * @param dh                     预处理时的垂直填充
- * @param confidence_threshold   置信度阈值
- * @param nms_threshold          NMS IoU 阈值
- * @return                       检测结果列表
- *
- * 注意：此函数假设模型输出像素坐标（0~input_size），非归一化。
- */
-std::vector<Detection> parseYOLOv8OutputAnchorFirst(
-    const float* outputData,
-    int numClasses,
-    int numAnchors,
-    int imageWidth,
-    int imageHeight,
-    float scale,
-    int dw,
-    int dh,
-    float confidence_threshold,
-    float nms_threshold,
-    int usedClasses = -1    // -1=使用全部numClasses；>0=只用前N类
-);
-
-// ============================================================
 //  3. 获取输出信息（自动计算 numClasses / numAnchors）
 // ============================================================
 /**
- * @param session   ONNX Runtime Session
- * @return          OutputInfo 结构体
+ * @param outputShape  模型输出张量的 shape（如 {1, 8, 8400} 或 {1, 8400, 8}）
+ * @return             OutputInfo 结构体
  */
-OutputInfo getOutputInfo(Ort::Session& session);
+OutputInfo getOutputInfo(const std::vector<size_t>& outputShape);
 
 #endif  // DETECTION_HPP_

@@ -22,7 +22,7 @@ struct VisionSendPacket
 
     uint16_t first_cmd      : 2;   // bit 0-1  (0=直行, 1=左转, 2=右转)
     uint16_t second_cmd     : 2;   // bit 2-3  (1=左分支, 2=中分支, 3=右分支)
-    uint16_t turn_strength  : 7;   // bit 4-10 (0~120)
+    uint16_t turn_strength  : 7;   // bit 4-10 (0~127)
     uint16_t reserved       : 5;   // bit 11-15
 
     uint16_t checksum = 0;        // CRC16

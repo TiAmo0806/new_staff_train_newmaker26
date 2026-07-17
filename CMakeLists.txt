@@ -29,14 +29,9 @@ if(NOT yaml-cpp_FOUND)
     endif()
 endif()
 
-# ---- ONNX Runtime (项目内) ----
-set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/include/onnxruntime-sdk")
-set(ONNXRUNTIME_INCLUDE "${ONNXRUNTIME_ROOT}/include")
-set(ONNXRUNTIME_LIB     "${ONNXRUNTIME_ROOT}/lib/libonnxruntime.so")
-
-if(NOT EXISTS "${ONNXRUNTIME_LIB}")
-    message(FATAL_ERROR "❌ 找不到 ONNX Runtime 库: ${ONNXRUNTIME_LIB}")
-endif()
+# ---- OpenVINO ----
+find_package(OpenVINO REQUIRED)
+message(STATUS "OpenVINO: ${OpenVINO_VERSION}")
 
 # ---- MindVision SDK ----
 # 优先级：项目内置 > -DMVSDK_ROOT=... > 系统默认路径
@@ -103,7 +98,7 @@ add_executable(${PROJECT_NAME} ${SOURCES})
 # ============================================================
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/include
-    ${ONNXRUNTIME_INCLUDE}
+    ${OpenVINO_INCLUDE_DIRS}
 )
 
 # 相机 SDK 头文件（如果存在）
@@ -119,7 +114,7 @@ endif()
 # ============================================================
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${OpenCV_LIBS}
-    ${ONNXRUNTIME_LIB}
+    openvino::runtime
 )
 
 # yaml-cpp
@@ -148,10 +143,10 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     -Wall -Wextra -O2
 )
 
-# ONNX Runtime + MindVision SDK 运行时路径
+# OpenVINO + MindVision SDK 运行时路径
 set_target_properties(${PROJECT_NAME} PROPERTIES
-    BUILD_RPATH "${ONNXRUNTIME_ROOT}/lib:${MVSDK_ROOT}/lib"
-    INSTALL_RPATH "${ONNXRUNTIME_ROOT}/lib:${MVSDK_ROOT}/lib"
+    BUILD_RPATH "${MVSDK_ROOT}/lib"
+    INSTALL_RPATH "${MVSDK_ROOT}/lib"
 )
 
 # ============================================================
@@ -162,7 +157,7 @@ message(STATUS "  bean_vision 构建配置")
 message(STATUS "========================================")
 message(STATUS "  C++ 标准:     ${CMAKE_CXX_STANDARD}")
 message(STATUS "  OpenCV:        ${OpenCV_VERSION}")
-message(STATUS "  ONNX Runtime:  ${ONNXRUNTIME_LIB}")
+message(STATUS "  OpenVINO:      ${OpenVINO_VERSION}")
 message(STATUS "  MVSDK include: ${MVSDK_INCLUDE}")
 message(STATUS "  MVSDK lib:     ${MVSDK_LIB}")
 message(STATUS "========================================")

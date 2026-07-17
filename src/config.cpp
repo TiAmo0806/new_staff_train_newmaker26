@@ -18,6 +18,8 @@ VisionConfig loadVisionConfig(const std::string& filepath)
         {
             if (root["model"]["model_path"])
                 cfg.model_path = root["model"]["model_path"].as<std::string>();
+            if (root["model"]["fallback_model_path"])
+                cfg.fallback_model_path = root["model"]["fallback_model_path"].as<std::string>();
         }
         if (root["detection"])
         {
@@ -42,9 +44,13 @@ VisionConfig loadVisionConfig(const std::string& filepath)
                 cfg.reconnect_threshold = root["camera"]["reconnect_threshold"].as<int>();
             if (root["camera"]["reconnect_delay_ms"])
                 cfg.reconnect_delay_ms = root["camera"]["reconnect_delay_ms"].as<int>();
+            if (root["camera"]["target_fps"])
+                cfg.target_fps = root["camera"]["target_fps"].as<int>();
         }
         if (root["serial"])
         {
+            if (root["serial"]["strict_mode"])
+                cfg.serial_strict_mode = root["serial"]["strict_mode"].as<bool>();
             if (root["serial"]["reconnect_cooldown_ms"])
                 cfg.serial_reconnect_cooldown_ms = root["serial"]["reconnect_cooldown_ms"].as<int>();
             if (root["serial"]["max_reconnect_attempts"])
@@ -58,6 +64,11 @@ VisionConfig loadVisionConfig(const std::string& filepath)
                 cfg.font_thickness = root["display"]["font_thickness"].as<int>();
             if (root["display"]["line_thickness"])
                 cfg.line_thickness = root["display"]["line_thickness"].as<int>();
+        }
+        if (root["tracker"])
+        {
+            if (root["tracker"]["stable_threshold"])
+                cfg.stable_threshold = root["tracker"]["stable_threshold"].as<int>();
         }
         
         std::cout << "从 " << filepath << " 加载视觉参数成功" << std::endl;

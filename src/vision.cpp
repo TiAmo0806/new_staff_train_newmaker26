@@ -19,22 +19,14 @@
 #include "config.hpp"
 #include "cemare.hpp"
 #include "visualizer.hpp"
-#include "yolo_detector.hpp"
+#include "ov_detector.hpp"
 #include "route_config.hpp"
 #include "stable_tracker.hpp"
 #include "packet.hpp"
 #include "serial.hpp"
 
-namespace fs = std::filesystem;
-
 //  类型别名
 using Configs = std::tuple<VisionConfig, RouteConfig, fs::file_time_type>;
-
-struct ReloadResult {
-    VisionConfig cfg;
-    fs::file_time_type mtime;
-    bool changed;
-};
 
 //  1. 初始化 —— 各自独立，返回值表达结果
 
@@ -49,18 +41,35 @@ static Configs loadAllConfigs(const std::string& visionPath,
 }
 
 static bool
-initDetector(YOLODetector& detector,
+initDetector(OVDetector& detector,
              const std::string& modelPath, const VisionConfig& cfg)
 {
-    bool ok = detector.loadModel(modelPath, cfg.input_width, cfg.input_height);
-    if (ok) {
+    auto tryLoad = [&](const std::string& path) {
+        return detector.loadModelWithRetry(path, 3, 1000,
+                                           cfg.input_width, cfg.input_height);
+    };
+
+    // 主模型
+    if (tryLoad(modelPath)) {
         detector.setNmsThreshold(cfg.nms_threshold);
         detector.setUsedClasses(cfg.used_classes);
         std::cout << "YOLO 模型已加载" << std::endl;
-    } else {
-        std::cerr << "模型未加载，将只显示相机画面（无检测）" << std::endl;
+        return true;
     }
-    return ok;
+
+    // 备用模型
+    if (!cfg.fallback_model_path.empty()) {
+        std::cerr << "主模型失败，尝试备用模型: " << cfg.fallback_model_path << std::endl;
+        if (tryLoad(cfg.fallback_model_path)) {
+            detector.setNmsThreshold(cfg.nms_threshold);
+            detector.setUsedClasses(cfg.used_classes);
+            std::cout << "备用模型已加载" << std::endl;
+            return true;
+        }
+    }
+
+    std::cerr << "模型加载失败（主+备用均不可用），程序退出" << std::endl;
+    std::exit(1);
 }
 
 
@@ -71,39 +80,17 @@ static bool initSerial(SerialPort& serial, const std::string& port,
     serial.setMaxReconnectAttempts(cfg.serial_max_reconnect_attempts);
 
     bool ok = serial.open(port);
-    if (ok)
+    if (ok) {
         std::cout << "串口已打开 (" << port << ")" << std::endl;
-    else
-        std::cerr << "串口未打开 (" << port << ")，将只显示画面（无发送）" << std::endl;
-    return ok;
-}
-
-// ============================================================
-//  2. 热重载 —— 输入旧状态，输出新状态
-// ============================================================
-
-static ReloadResult
-reloadVisionIfChanged(const std::string& path,
-                      const VisionConfig& oldCfg,
-                      const fs::file_time_type& lastMtime)
-{
-    auto nowMtime = safeLastWriteTime(path);
-    if (nowMtime != lastMtime) {
-        std::cout << "视觉参数变化，重载..." << std::endl;
-        return {loadVisionConfig(path), nowMtime, true};
+        return true;
     }
-    return {oldCfg, lastMtime, false};
-}
 
-static RouteConfig
-reloadRoutesIfChanged(const std::string& path, RouteConfig routes)
-{
-    if (routes.fileChanged()) {
-        std::cout << "路径映射变化，重载..." << std::endl;
-        routes.load(path);
+    if (cfg.serial_strict_mode) {
+        std::cerr << "串口打开失败 (" << port << ")，strict_mode 开启，程序退出" << std::endl;
+        std::exit(1);
     }
-//两套实现方式不一样——vision 用外部追踪 mtime，route 用内部fileChanged()
-    return routes;
+    std::cerr << "串口未打开 (" << port << ")，降级模式：只显示画面（无发送）" << std::endl;
+    return false;
 }
 
 // ============================================================
@@ -111,7 +98,7 @@ reloadRoutesIfChanged(const std::string& path, RouteConfig routes)
 // ============================================================
 
 static std::vector<Detection>
-runInference(const cv::Mat& frame, YOLODetector& detector,
+runInference(const cv::Mat& frame, OVDetector& detector,
              const VisionConfig& cfg, bool modelOk)
 {
     if (!modelOk) return {};
@@ -190,16 +177,13 @@ static void sendCommand(const std::string& targetName,
 
 static bool renderFrame(cv::Mat& frame,
                         const std::vector<Detection>& dets,
-                        const StableTracker& tracker,
                         const VisionConfig& cfg,
                         const std::vector<cv::Scalar>& colors,
-                        bool modelOk, bool serialOk, double fps,
                         const std::chrono::steady_clock::time_point& t0)
 {
-    drawDebug(frame, dets, tracker, cfg, colors, modelOk, serialOk, fps);
+    drawDebug(frame, dets, cfg, colors);
 
-    constexpr int targetFps = 30;
-    int delay   = 1000 / targetFps;
+    int delay = (cfg.target_fps > 0) ? 1000 / cfg.target_fps : 33;
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - t0)
                        .count();
@@ -212,7 +196,7 @@ static bool renderFrame(cv::Mat& frame,
 // ============================================================
 
 static void runLoop(Camera& cam,
-                    YOLODetector& detector,
+                    OVDetector& detector,
                     SerialPort& serial,
                     VisionConfig         cfg,
                     RouteConfig          routes,
@@ -223,10 +207,8 @@ static void runLoop(Camera& cam,
                     const std::vector<cv::Scalar>& colors)
 {
     auto lastVisionMtime = safeLastWriteTime(visionPath);
-    StableTracker tracker(90);
+    StableTracker tracker(cfg.stable_threshold);
     int frameCount   = 0;
-    double fps       = 0.0;
-    auto lastTime    = std::chrono::steady_clock::now();
 
     std::cout << "按 'q' 退出 | 模型:" << (modelOk ? "true" : "false")
               << " | 串口:" << (serialOk ? "true" : "false") << std::endl;
@@ -235,15 +217,8 @@ static void runLoop(Camera& cam,
         auto t0 = std::chrono::steady_clock::now();
         frameCount++;
 
-        // FPS
-        {
-            auto dt = std::chrono::duration<double>(t0 - lastTime).count();
-            lastTime = t0;
-            fps = (dt > 0) ? 1.0 / dt : 0.0;
-        }
-
         // 热重载
-        routes = reloadRoutesIfChanged(routePath, std::move(routes));
+        routes.reloadIfChanged(routePath);
         {
             auto [newCfg, newMtime, changed] =
                 reloadVisionIfChanged(visionPath, cfg, lastVisionMtime);
@@ -276,8 +251,7 @@ static void runLoop(Camera& cam,
         }
 
         // 显示
-        if (renderFrame(frame, dets, tracker, cfg, colors,
-                        modelOk, serialOk, fps, t0))
+        if (renderFrame(frame, dets, cfg, colors, t0))
             break;
     }
 
@@ -299,7 +273,7 @@ int main()
     auto [cfg, routes, lastMtime] = loadAllConfigs(visionPath, routePath);
     auto colors                   = buildColorTable(CLASS_NAMES.size());
 
-    YOLODetector detector;
+    OVDetector detector;
     bool modelOk = initDetector(detector, resolveProjectPath(cfg.model_path), cfg);
 
     Camera cam;

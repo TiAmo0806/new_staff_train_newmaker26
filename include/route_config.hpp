@@ -78,6 +78,15 @@ public:
         return safeLastWriteTime(filepath_) != mtime_;
     }
 
+    /// 检测变化并自动重载，有变化返回 true
+    bool reloadIfChanged(const std::string& filename = "route_config.txt")
+    {
+        if (!fileChanged()) return false;
+        std::cout << "路径映射变化，重载..." << std::endl;
+        load(filename);
+        return true;
+    }
+
 private:
     std::string filepath_;
     std::map<std::string, PathCommand> mapping_;

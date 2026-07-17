@@ -4,7 +4,6 @@
 
 #include "detection.hpp"
 #include <opencv2/dnn.hpp>
-#include <onnxruntime-sdk/include/onnxruntime_cxx_api.h>
 #include <algorithm>
 #include <iostream>
 
@@ -211,117 +210,45 @@ std::vector<Detection> parseYOLOv8OutputFeatureFirst(
     return applyNMS(detections, nms_threshold);
 }
 
-//  2c. 解析 YOLO 输出 —— 锚点在前 [anchors, classes+4]（某些第三方导出格式）
-std::vector<Detection> parseYOLOv8OutputAnchorFirst(
-    const float* outputData,
-    int numClasses,
-    int numAnchors,
-    int imageWidth,
-    int imageHeight,
-    float scale,
-    int dw,
-    int dh,
-    float confidence_threshold,
-    float nms_threshold,
-    int usedClasses)
-{
-    std::vector<Detection> detections;
-    detections.reserve(numAnchors);  // 预分配，避免频繁扩容
-
-    int elemPerAnchor = numClasses + 4;  // 每个 anchor 的字段数
-    int maxClass = (usedClasses > 0) ? std::min(numClasses, usedClasses) : numClasses;
-
-    for (int a = 0; a < numAnchors; ++a) {
-        int base = a * elemPerAnchor;  // 第 a 个框的起始地址
-
-        // ---- 找最大类别分数 ----
-        int bestClass = -1;
-        float bestScore = -1.0f;
-        for (int c = 0; c < maxClass; ++c) {
-            float score = outputData[base + 4 + c];
-            if (score > bestScore) {
-                bestScore = score;
-                bestClass = c;
-            }
-        }
-
-        if (bestScore < confidence_threshold) continue;
-
-        // ---- 取坐标 ----
-        float cx = outputData[base + 0];
-        float cy = outputData[base + 1];
-        float w  = outputData[base + 2];
-        float h  = outputData[base + 3];
-
-        // ---- 坐标还原到原图 ----
-        float x1 = (cx - w * 0.5f - dw) * scale;
-        float y1 = (cy - h * 0.5f - dh) * scale;
-        float x2 = (cx + w * 0.5f - dw) * scale;
-        float y2 = (cy + h * 0.5f - dh) * scale;
-
-        int x = static_cast<int>(x1);
-        int y = static_cast<int>(y1);
-        int width = static_cast<int>(x2 - x1);
-        int height = static_cast<int>(y2 - y1);
-
-        // ---- 边界裁剪 ----
-        x = std::max(0, std::min(x, imageWidth - 1));
-        y = std::max(0, std::min(y, imageHeight - 1));
-        width = std::max(1, std::min(width, imageWidth - x));
-        height = std::max(1, std::min(height, imageHeight - y));
-
-        detections.push_back({bestClass, bestScore, cv::Rect(x, y, width, height)});
-    }
-
-    return applyNMS(detections, nms_threshold);
-}
 //  3. 获取输出信息（自动计算 numClasses / numAnchors）
-OutputInfo getOutputInfo(Ort::Session& session)
+OutputInfo getOutputInfo(const std::vector<size_t>& shape)
 {
     OutputInfo info;
-    try {
-        // 获取输出形状
-        auto type_info = session.GetOutputTypeInfo(0);
-        auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
-        info.outputShape = tensor_info.GetShape();
 
-        // 根据输出形状计算
-        // 常见格式1: [batch, num_anchors, num_classes + 4]
-        // 常见格式2: [batch, num_classes + 4, num_anchors]
-        if (info.outputShape.size() == 3) {
-            int dim1 = static_cast<int>(info.outputShape[1]);
-            int dim2 = static_cast<int>(info.outputShape[2]);
+    // 转为 int64_t 兼容 OutputInfo 的 outputShape 字段
+    info.outputShape.clear();
+    for (auto d : shape) info.outputShape.push_back(static_cast<int64_t>(d));
 
-            // 通常 num_classes 在 10~200 之间，num_anchors 在 1000~10000 之间
-            if (dim1 > dim2) {
-                // [batch, anchors, classes+4]
-                info.numAnchors = dim1;
-                info.numClasses = dim2 - 4;
-                info.isFeatureFirst = false;
-            } else {
-                // [batch, classes+4, anchors]
-                info.numClasses = dim1 - 4;
-                info.numAnchors = dim2;
-                info.isFeatureFirst = true;
-            }
+    // 常见格式1: [batch, num_anchors, num_classes + 4]
+    // 常见格式2: [batch, num_classes + 4, num_anchors]
+    if (shape.size() == 3) {
+        int dim1 = static_cast<int>(shape[1]);
+        int dim2 = static_cast<int>(shape[2]);
+
+        // 通常 num_classes 在 10~200 之间，num_anchors 在 1000~10000 之间
+        if (dim1 > dim2) {
+            // [batch, anchors, classes+4]
+            info.numAnchors = dim1;
+            info.numClasses = dim2 - 4;
+            info.isFeatureFirst = false;
         } else {
-            std::cerr << "未知的输出形状，使用默认值" << std::endl;
-            info.numClasses = 3;
-            info.numAnchors = 8400;
+            // [batch, classes+4, anchors]
+            info.numClasses = dim1 - 4;
+            info.numAnchors = dim2;
+            info.isFeatureFirst = true;
         }
-
-        std::cout << "输出信息:" << std::endl;
-        std::cout << "   - 形状: ";
-        for (auto d : info.outputShape) std::cout << d << " ";
-        std::cout << std::endl;
-        std::cout << "   - numClasses: " << info.numClasses << std::endl;
-        std::cout << "   - numAnchors: " << info.numAnchors << std::endl;
-
-    } catch (const Ort::Exception& e) {
-        std::cerr << "获取输出信息失败: " << e.what() << std::endl;
+    } else {
+        std::cerr << "未知的输出形状，使用默认值" << std::endl;
         info.numClasses = 3;
         info.numAnchors = 8400;
     }
+
+    std::cout << "输出信息:" << std::endl;
+    std::cout << "   - 形状: ";
+    for (auto d : info.outputShape) std::cout << d << " ";
+    std::cout << std::endl;
+    std::cout << "   - numClasses: " << info.numClasses << std::endl;
+    std::cout << "   - numAnchors: " << info.numAnchors << std::endl;
 
     return info;
 }

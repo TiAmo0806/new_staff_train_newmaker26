@@ -1,6 +1,6 @@
 # 校内赛：Bean_Vision
 
-基于 YOLO + ONNX Runtime 的豆类识别与路径引导系统。相机采集 → 模型推理 → 稳定跟踪 → 查表 → 串口发送指令给云台。
+基于 YOLO + OpenVINO 的豆类识别与路径引导系统。相机采集 → 模型推理 → 稳定跟踪 → 查表 → 串口发送指令给云台。
 
 ---
 
@@ -14,13 +14,14 @@
 │   ├── config.hpp            # VisionConfig 结构体 + 颜色表声明
 │   ├── cemare.hpp            # 迈德威视相机封装
 │   ├── detection.hpp         # 检测结果结构体 + 预处理/后处理声明
-│   ├── yolo_detector.hpp     # YOLO 检测器（ONNX Runtime 推理）
+│   ├── ov_detector.hpp       # YOLO 检测器（OpenVINO 推理）
 │   ├── stable_tracker.hpp    # 稳定跟踪状态机
-│   ├── route_config.hpp      # 路径映射 + 文件工具
+│   ├── route_config.hpp      # 路径映射 + 热重载
 │   ├── visualizer.hpp        # 调试可视化声明
 │   ├── serial.hpp            # 串口通信声明
 │   ├── packet.hpp            # 串口数据包定义
-│   └── CRC16.hpp             # CRC16 校验声明
+│   ├── CRC16.hpp             # CRC16 校验声明
+│   └── utils.hpp             # 文件工具函数
 ├── src/
 │   ├── vision.cpp            # 主程序（函数式编排）
 │   ├── config.cpp            # YAML 配置加载 + 颜色表生成
@@ -108,30 +109,49 @@ white_kidney_bean 2 3 60
 
 ## 相机模块（`cemare.hpp` / `camera.cpp`）
 
-迈德威视工业相机 SDK 封装。
+迈德威视工业相机 SDK 封装类Camera
 
 | 方法 | 功能 |
 |------|------|
 | `构造函数` | 初始化sdk |
 | `析构函数` | 调用close() |
-| `open(w, h)` | 枚举 → 相机初始化 → 设置 ISP 格式（自动判断彩色/黑白） → cameraplay |
+| `open(w, h)` | 枚举->相机初始化->设置 ISP 格式（自动判断彩色/黑白）->cameraplay |
 | `getFrame()` | 阻塞取一帧，2000ms 超时，经 SDK 图像处理后返回 `cv::Mat`（BGR） |
 | `close()` | cameraUninit->释放缓存 |
+
+| 成员 | 功能 |
+|------|------|
+| `int fd_` | 文件描述符，操作系统内核用来标识“打开的文件/设备”的一串数字编号 |
+| `std::string portName_` | 设备路径 |
+| `bool txLogEnabled_` | 是否打印日志 |
 
 分辨率不强制设置，相机跑原生尺寸，`preprocess` 里 letterbox 做缩放。
 
 ---
 
-## YOLO 检测器（`yolo_detector.hpp`）
+## YOLO 检测器（`ov_detector.hpp`）
 
-封装 ONNX Runtime 推理全流程。由于 `Ort::Session` 是模板类，全部实现放在头文件。
+封装 OpenVINO C++ API 2.0 推理全流程类OVDetector
 
 | 方法 | 功能 |
 |------|------|
-| `loadModel(path, w, h)` | 加载 .onnx → 读输入形状 → `getOutputInfo()` 算类别数/锚点数 → 预分配 tensor |
-| `infer(frame, threshold)` | 预处理 → 创建 tensor → `session_.Run()` 推理 → `parseYOLOv8Output*` 后处理 |
+| `loadModel` | 读取 .onnx->读输入形状->解析输出形状->`compile_model` 编译->预分配 tensor |
+| `loadModelWithRetry(path, retries, delay, w, h)` | 预检（存在+大小）->重试加载 |
+| `infer(frame, threshold)` | `preprocess`预处理->创建 Tensor->`infer_request.infer()`->`parseYOLOv8Output*` 后处理 |
 | `setNmsThreshold(t)` | 设置 NMS IoU 阈值 |
 | `setUsedClasses(n)` | 设置只用前N类（-1=全部） |
+| `selectDevice()` | 自动探测可用设备，`useGPU=true` 且 GPU 可用时优先 Intel 核显，否则回落 CPU。 |
+
+| 成员 | 功能 |
+|------|------|
+| `core_` | OpenVINO 的顶层管理对象 |
+| `compiledModel_` | 模型编译结果 |
+| `inferRequest_` | 推理请求句柄 |
+| `outputInfo_` | 把输出张量打包为结构体 |
+| `modelInputShape_` | 送入模型的张量参数 |
+| `modelInputSize_` | 送入模型的张量参数 |
+| `inputWidth_` | 自定义输入尺寸，由yaml设置 |
+| `inputHeight_` | 自定义输入尺寸，由yaml设置 |
 
 ### 预处理（`datection.cpp`）
 
@@ -139,19 +159,17 @@ white_kidney_bean 2 3 60
 
 | 函数 | 说明 |
 |------|------|
-| `applyCLAHE` | [classes+4, anchors] 格式 |
-| `parseYOLOv8OutputAnchorFirst` | [anchors, classes+4] 格式|
-| `applyNMS` | 按置信度排序 → IoU 过滤 → 去重 |
-| `getOutputInfo` | 从输出 shape 自动推断 `numClasses` 和 `numAnchors` |
+| `applyCLAHE` | CLAHE 自适应直方图均衡，增强光照鲁棒性 |
+| `applyLetterbox` | 等比例缩放 + 灰边填充（114,114,114） |
+| `preprocess` | 组合调用：计算缩放参数 → CLAHE → Letterbox → blobFromImage |
 
 ### 后处理（`datection.cpp`）
 
 | 函数 | 说明 |
 |------|------|
-| `parseYOLOv8OutputFeatureFirst` | [classes+4, anchors] 格式 |
-| `parseYOLOv8OutputAnchorFirst` | [anchors, classes+4] 格式|
+| `parseYOLOv8OutputFeatureFirst` | [classes+4, anchors] 格式（YOLOv8/v11 官方） |
 | `applyNMS` | 按置信度排序 → IoU 过滤 → 去重 |
-| `getOutputInfo` | 从输出 shape 自动推断 `numClasses` 和 `numAnchors` |
+| `getOutputInfo` | 从输出 shape 自动推断 `numClasses` 和 `numAnchors`（框架无关） |
 
 ---
 
@@ -162,11 +180,12 @@ white_kidney_bean 2 3 60
 ```
 检测到目标 → 连续 N 帧一致 → 确认输出 → 进入冷却期（发送后沉默 M 帧） → 期满解锁
 ```
+类StableTracker
 
 | 方法 | 功能 |
 |------|------|
-| `update(dets, classNames)` | 取最高置信度目标，计数/切换/冷却逻辑，确认时返回目标名 |
-| `reset()` | 重置当前计数（不清除冷却状态） |
+| `update` | 找面积最大->持续一致->计数->达到阈值->确认->进入冷却 |
+| `reset` | 清除stable_counter_,stable_name_ |
 
 冷却期保护：同一目标触发后需等冷却期满才能再次触发，避免重复发送。
 
@@ -198,6 +217,8 @@ struct VisionSendPacket {
 
 ### serial.cpp —— Linux termios 串口
 
+SerialPort类
+
 | 方法 | 功能 |
 |------|------|
 | `构造函数` | fd_初始赋值-1 |
@@ -222,7 +243,9 @@ struct VisionSendPacket {
 | `int  maxReconnectAttempts_` | 最大重连次数，有yaml设置 |
 
 ### CRC16.hpp —— 校验
+
 constexpr uint16_t CRC16_INIT = 0xFFFF;
+
 | 函数 | 功能 |
 |------|------|
 | `Get_CRC16_Check_Sum` | 位运算，查表 |
@@ -237,49 +260,33 @@ constexpr uint16_t CRC16_INIT = 0xFFFF;
 |------|------|
 | `buildColorTable` | 颜色表，类别比例*180，颜色在hsv空间均匀分布 |
 | `initDebugWindow` | 可视化窗口并修改初始大小 |
-| `drawDebug` |  |
-
-`drawDebug()` 在帧上叠加三层信息：
-
-1. **检测框**：矩形 + 标签（类别名、置信度、坐标尺寸），颜色按类别编码
-2. **四角标记**：红色圆点，确认画面正常渲染
-3. **状态栏**：YOLO/串口灯号、FPS、跟踪状态（stable counter/cool down）、检测数量
+| `drawDebug` | 画检测框：矩形 + 标签，颜色按类别编码 |
 
 ---
 
 ## 主程序（`vision.cpp`）
 
-函数式架构，8 个函数各司其职：
+函数式架构，静态函数各司其职：
 
 ```
 main()
- ├── loadAllConfigs()           → (VisionConfig, RouteConfig, mtime)
- ├── buildColorTable()          → 颜色表
- ├── initDetector()             → bool（模型可降级）
- ├── initCamera()               → Camera（失败抛异常退出）
- ├── initSerial()               → bool（串口可降级）
- └── runLoop()                  → 主循环永不返回
-       ├── reloadRoutesIfChanged()      → RouteConfig
-       ├── reloadVisionIfChanged()      → {VisionConfig, mtime, changed}
-       ├── captureFrame()               → optional<Mat>（带自动重连）
-       ├── runInference()               → vector<Detection>
-       ├── printDiagnostics()           → 每30帧输出终端日志
+ ├── loadAllConfigs()                     → (VisionConfig, RouteConfig, mtime)
+ ├── buildColorTable()                    → 颜色表
+ ├── initDetector()                       → bool（模型可降级，失败 exit）
+ ├── Camera::open()                       → bool（失败 exit）
+ ├── initSerial()                         → bool（串口可降级）
+ ├── initDebugWindow()                    → 创建调试窗口
+ └── runLoop()                            → 主循环永不返回
+       ├── routes.reloadIfChanged()       → RouteConfig 热重载
+       ├── reloadVisionIfChanged()        → (VisionConfig, mtime, changed) 热重载
+       ├── cam.getFrameSafe()             → optional<Mat>（带自动重连）
+       ├── runInference()                 → vector<Detection>
+       ├── printDiagnostics()             → 每30帧输出终端日志
        ├── tracker.update() → routes.lookup() → sendCommand()
-       │     └── 封包 → CRC → serial.send()（或模拟打印）
-       └── renderFrame()                → bool（按q退出）
+       │     └── makePacket → pack(CRC16) → serial.transmit()（或模拟打印）
+       └── renderFrame()                  → bool（按q退出）
 ```
-
-**容错设计**：模型和串口失败不退出，照常显示相机画面。相机失败直接退出。
 
 ---
 
-## 构建与运行
-
-```bash
-cd build
-cmake ..
-make -j$(nproc)
-./bean_vision
-```
-
-依赖：OpenCV 4.x、yaml-cpp、ONNX Runtime、MindVision SDK。
+依赖：OpenCV 4.x、yaml-cpp、OpenVINO、MindVision SDK。

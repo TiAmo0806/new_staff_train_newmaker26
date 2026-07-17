@@ -1,38 +1,34 @@
 /**
  * stable_tracker.cpp —— 稳定跟踪状态机实现
+ *
+ * 策略：
+ *   连续 N 帧检测到同一目标 → 确认发送。
+ *   发送后记录 last_sent_，同一目标不再触发；
+ *   仅当切换到不同目标并稳定确认后，才发送新指令。
  */
 
 #include "stable_tracker.hpp"
 
-const Detection* StableTracker::bestDetection(const std::vector<Detection>& dets)
-{
-    if (dets.empty()) return nullptr;
-    const Detection* best = &dets[0];
-    for (const auto& d : dets)
-        if (d.confidence > best->confidence) best = &d;
-    return best;
-}
-
 std::optional<std::string> StableTracker::update(
     const std::vector<Detection>& detections)
 {
-    const Detection* best = bestDetection(detections);
-    if (!best) {
-        reset();
+    // 选面积最大的（面积大 ≈ 距离近，当前最需要处理的豆子）
+    if (detections.empty()) {
+        stable_counter_ = 0;
+        stable_name_.clear();
         return std::nullopt;
     }
 
+    const Detection* best = &detections[0];
+    for (const auto& d : detections)
+        if (d.bbox.area() > best->bbox.area()) best = &d;
+
     std::string name = CLASS_NAMES[best->class_id];
 
-    // 冷却期：发送后沉默 N 帧，期满自动解锁
+    // 与上次发送的目标相同 → 不重复发送
     if (name == last_sent_) {
-        cooldown_counter_++;
-        if (cooldown_counter_ >= cooldown_frames_) {
-            last_sent_.clear();
-            cooldown_counter_ = 0;
-            stable_name_ = name;
-            stable_counter_ = 1;
-        }
+        stable_counter_ = 0;
+        stable_name_.clear();
         return std::nullopt;
     }
 
@@ -40,14 +36,14 @@ std::optional<std::string> StableTracker::update(
     if (name == stable_name_) {
         stable_counter_++;
     } else {
+        // 切换到新目标 → 重新计数
         stable_name_ = name;
         stable_counter_ = 1;
     }
 
-    // 达到阈值 → 确认，进入冷却
+    // 达到稳定阈值 → 确认发送，并记录
     if (stable_counter_ >= threshold_) {
         last_sent_ = name;
-        cooldown_counter_ = 0;
         stable_counter_ = 0;
         stable_name_.clear();
         return name;

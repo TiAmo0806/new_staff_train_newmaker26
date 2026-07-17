@@ -1,7 +1,7 @@
 /**
  * stable_tracker.hpp —— 稳定跟踪状态机
  * 连续 N 帧检测到同一物体才确认，避免误触发。
- * 发送后进入冷却期，冷却期满自动解锁，允许再次触发同一目标。
+ * 发送后仅当目标发生变化时才允许再次发送，同一目标不重复发送。
  */
 
 #ifndef STABLE_TRACKER_HPP_
@@ -15,25 +15,28 @@
 
 class StableTracker {
 public:
-    explicit StableTracker(int threshold = 10, int cooldown = 150)
-        : threshold_(threshold), cooldown_frames_(cooldown) {}
+    explicit StableTracker(int threshold = 10)
+        : threshold_(threshold) {}
 
     /**
      * @brief 更新跟踪状态
      * @param detections 当前帧检测结果
-     * @param classNames 类别名称表
-     * @return 如果稳定确认，返回目标名称；否则返回 nullopt
+     * @return 如果稳定确认且目标与上次不同，返回目标名称；否则返回 nullopt
+     *
+     * 行为：
+     *   - 连续 threshold_ 帧检测到同一目标 → 确认发送
+     *   - 发送后，同一目标不再触发（直到切换到其他目标后才重置）
+     *   - 目标丢失或切换 → 重新计数
      */
     std::optional<std::string> update(
         const std::vector<Detection>& detections);
 
-    /// 完全重置
+    /// 完全重置（包括已发送记录）
     void reset()
     {
         stable_counter_ = 0;
         stable_name_.clear();
-        // 注意：last_sent_ 和 cooldown 不在这里清除，
-        // 只在冷却期满后自动清除，避免短暂丢帧钻空子
+        last_sent_.clear();
     }
 
     // ---- 调试信息 ----
@@ -41,18 +44,12 @@ public:
     int stableCounter()                const { return stable_counter_; }
     int threshold()                    const { return threshold_; }
     const std::string& lastSent()      const { return last_sent_; }
-    int cooldownCounter()              const { return cooldown_counter_; }
-    int cooldownFrames()               const { return cooldown_frames_; }
 
 private:
-    static const Detection* bestDetection(const std::vector<Detection>& dets);
-
     std::string stable_name_;
     int stable_counter_ = 0;
-    std::string last_sent_;
+    std::string last_sent_;       // 上一次已发送的目标（变化前不重复发送）
     int threshold_;
-    int cooldown_frames_;
-    int cooldown_counter_ = 0;
 };
 
 #endif  // STABLE_TRACKER_HPP_

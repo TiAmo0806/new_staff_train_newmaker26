@@ -2,14 +2,15 @@
 # 修改后自动生效，无需重新编译
 
 model:
-  model_path: "best4.onnx"        # 模型文件路径
+  model_path: "best6.onnx"        # 模型文件路径
+  fallback_model_path: "best5.onnx"         # 备用模型路径（主模型失败时自动切换，留空则不启用）
 
 detection:
-  confidence_threshold: 0.3
+  confidence_threshold: 0.6
   nms_threshold: 0.25
   input_width: 640
   input_height: 640
-  used_classes: -1      # 只使用前N类（-1=全部）
+  used_classes: 3     # 只使用前N类（-1=全部）
 
 display:
   font_scale: 0.6
@@ -21,7 +22,12 @@ camera:
   analog_gain: 8             # 手动增益（关AE后必须手动设gain，否则gain会掉底）
   reconnect_threshold: 50      # 连续空帧阈值（达到后触发重连）
   reconnect_delay_ms: 500      # 重连前等待时间(ms)，给驱动释放资源的时间
+  target_fps: 30               # 主循环帧率上限（影响推理+串口发送频率）
 
 serial:
+  strict_mode: false               # 串口打开失败时直接退出（true=退出，false=降级继续跑）
   reconnect_cooldown_ms: 5000       # 重连冷却时间(ms)，两次重连的最小间隔
   max_reconnect_attempts: 10        # 最大连续失败次数，超过后进入降级模式（只显示不发送）
+
+tracker:
+  stable_threshold: 60            # 连续确认帧数（同一目标检测到N帧后才触发发送）
