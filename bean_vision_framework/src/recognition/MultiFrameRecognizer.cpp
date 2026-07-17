@@ -331,6 +331,22 @@ PositionResult chooseVoteFixed(const PositionVotesFixed& votes,
     return result;
 }
 
+int bestVoteCountFixed(const PositionVotesFixed& votes, const std::string& position_id) {
+    const auto position_it = votes.find(position_id);
+    if (position_it == votes.end()) {
+        return 0;
+    }
+
+    int best_count = 0;
+    for (const auto& [class_name, bucket] : position_it->second) {
+        (void)class_name;
+        if (bucket.count > best_count) {
+            best_count = bucket.count;
+        }
+    }
+    return best_count;
+}
+
 }  // namespace
 
 MultiFrameRecognizer::MultiFrameRecognizer(const AppConfig& config) : config_(config) {}
@@ -359,22 +375,42 @@ VisionResult MultiFrameRecognizer::scan(InputManager& input,
                   << " frames retry=" << retry << "/" << config_.scan.max_retry << "\n";
 
         PositionVotesFixed votes;
+        int frames_read_ok = 0;
+        int frames_read_failed = 0;
+        int detection_frames = 0;
+        int roi_hit_frames = 0;
         for (int frame_index = 0; frame_index < config_.scan.frames_per_scan; ++frame_index) {
             cv::Mat frame;
             if (!input.read(frame) || frame.empty()) {
                 std::cout << "[WARN] failed to read camera frame\n";
+                frames_read_failed += 1;
                 continue;
             }
+            frames_read_ok += 1;
 
             std::vector<Detection> detections = detector.detect(frame);
+            if (!detections.empty()) {
+                detection_frames += 1;
+            }
             VisionResult frame_result = parser.parse(detections);
 
             // 豆子阶段只统计 P1/P2/P3，数字阶段只统计 L4-L8。
             if (scan_beans) {
+                const bool has_roi_hit =
+                    frame_result.p1.valid || frame_result.p2.valid || frame_result.p3.valid;
+                if (has_roi_hit) {
+                    roi_hit_frames += 1;
+                }
                 addVoteFixed(votes, frame_result.p1);
                 addVoteFixed(votes, frame_result.p2);
                 addVoteFixed(votes, frame_result.p3);
             } else {
+                const bool has_roi_hit =
+                    frame_result.l4.valid || frame_result.l5.valid || frame_result.l6.valid ||
+                    frame_result.l7.valid || frame_result.l8.valid;
+                if (has_roi_hit) {
+                    roi_hit_frames += 1;
+                }
                 addVoteFixed(votes, frame_result.l4);
                 addVoteFixed(votes, frame_result.l5);
                 addVoteFixed(votes, frame_result.l6);
@@ -434,6 +470,28 @@ VisionResult MultiFrameRecognizer::scan(InputManager& input,
                                         config_.debug.print_vote_result);
             merged.success = merged.l4.valid || merged.l5.valid || merged.l6.valid || merged.l7.valid || merged.l8.valid;
             merged.reason = merged.success ? "ok" : "digit_scan_failed";
+        }
+
+        if (config_.debug.print_vote_result) {
+            std::cout << "[SCAN SUMMARY] stage=" << (scan_beans ? "bean" : "digit")
+                      << " retry=" << retry << "/" << config_.scan.max_retry
+                      << " frames_requested=" << config_.scan.frames_per_scan
+                      << " frames_read_ok=" << frames_read_ok
+                      << " frames_read_failed=" << frames_read_failed
+                      << " detection_frames=" << detection_frames
+                      << " roi_hit_frames=" << roi_hit_frames;
+            if (scan_beans) {
+                std::cout << " P1_votes=" << bestVoteCountFixed(votes, "P1")
+                          << " P2_votes=" << bestVoteCountFixed(votes, "P2")
+                          << " P3_votes=" << bestVoteCountFixed(votes, "P3");
+            } else {
+                std::cout << " L4_votes=" << bestVoteCountFixed(votes, "L4")
+                          << " L5_votes=" << bestVoteCountFixed(votes, "L5")
+                          << " L6_votes=" << bestVoteCountFixed(votes, "L6")
+                          << " L7_votes=" << bestVoteCountFixed(votes, "L7")
+                          << " L8_votes=" << bestVoteCountFixed(votes, "L8");
+            }
+            std::cout << " result=" << (merged.success ? "success" : "fail") << "\n";
         }
 
         if (merged.success) {
