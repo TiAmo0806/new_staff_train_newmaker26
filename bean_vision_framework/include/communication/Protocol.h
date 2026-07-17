@@ -4,6 +4,7 @@
 #include "core/VisionResult.h"
 #include "task/VisionMemory.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -32,6 +33,9 @@ enum class ProtocolCommand : uint8_t {
 
 class Protocol {
 public:
+    // 当前协议版本中最长合法 payload 是 FINAL_TASK 的 11 字节。
+    static constexpr size_t kMaxPayloadLength = 11;
+
     static const char* commandName(uint8_t cmd);
 
     /**

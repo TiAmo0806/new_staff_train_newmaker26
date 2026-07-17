@@ -274,21 +274,31 @@ bool SerialPort::waitForAck(uint8_t expected_cmd, uint8_t expected_seq) {
 
 bool SerialPort::tryExtractPacket(std::vector<uint8_t>& packet) {
     packet.clear();
-    while (!rx_buffer_.empty() && rx_buffer_.front() != 0xA5) {
-        rx_buffer_.erase(rx_buffer_.begin());
-    }
-    if (rx_buffer_.size() < 4) {
-        return false;
-    }
+    while (true) {
+        while (!rx_buffer_.empty() && rx_buffer_.front() != 0xA5) {
+            rx_buffer_.erase(rx_buffer_.begin());
+        }
+        if (rx_buffer_.size() < 4) {
+            return false;
+        }
 
-    const size_t expected_size = 4U + static_cast<size_t>(rx_buffer_[2]) + 2U;
-    if (rx_buffer_.size() < expected_size) {
-        return false;
-    }
+        const size_t declared_length = static_cast<size_t>(rx_buffer_[2]);
+        if (declared_length > Protocol::kMaxPayloadLength) {
+            std::cout << "[WARN] drop frame header: payload length=" << declared_length
+                      << " exceeds max=" << Protocol::kMaxPayloadLength << ", resync\n";
+            rx_buffer_.erase(rx_buffer_.begin());
+            continue;
+        }
 
-    packet.assign(rx_buffer_.begin(), rx_buffer_.begin() + static_cast<std::ptrdiff_t>(expected_size));
-    rx_buffer_.erase(rx_buffer_.begin(), rx_buffer_.begin() + static_cast<std::ptrdiff_t>(expected_size));
-    return true;
+        const size_t expected_size = 4U + declared_length + 2U;
+        if (rx_buffer_.size() < expected_size) {
+            return false;
+        }
+
+        packet.assign(rx_buffer_.begin(), rx_buffer_.begin() + static_cast<std::ptrdiff_t>(expected_size));
+        rx_buffer_.erase(rx_buffer_.begin(), rx_buffer_.begin() + static_cast<std::ptrdiff_t>(expected_size));
+        return true;
+    }
 }
 
 void SerialPort::printParsedPacket(const std::string& prefix, const std::vector<uint8_t>& packet) const {

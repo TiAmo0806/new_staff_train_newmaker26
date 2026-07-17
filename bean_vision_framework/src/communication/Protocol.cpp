@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 
 namespace {
 
@@ -217,6 +218,12 @@ ParsedPacket Protocol::parsePacket(const std::vector<uint8_t>& packet) const {
     parsed.cmd = packet[1];
     parsed.length = packet[2];
     parsed.seq = packet[3];
+    if (parsed.length > Protocol::kMaxPayloadLength) {
+        parsed.reason = "payload_too_large";
+        std::cout << "[WARN] drop frame: payload length=" << static_cast<int>(parsed.length)
+                  << " exceeds max=" << Protocol::kMaxPayloadLength << "\n";
+        return parsed;
+    }
 
     const size_t expected_size = 4U + parsed.length + 2U;
     if (packet.size() != expected_size) {
@@ -254,6 +261,12 @@ ParsedPacket Protocol::parsePacket(const std::vector<uint8_t>& packet) const {
 std::vector<uint8_t> Protocol::makePacket(uint8_t cmd, const std::vector<uint8_t>& payload) {
     // 统一封包格式：
     // 0xA5 cmd length seq payload... crc_l crc_h
+    if (payload.size() > Protocol::kMaxPayloadLength) {
+        throw std::invalid_argument(
+            "Protocol payload too large: actual=" + std::to_string(payload.size()) +
+            ", max=" + std::to_string(Protocol::kMaxPayloadLength));
+    }
+
     std::vector<uint8_t> packet;
     packet.push_back(0xA5);
     packet.push_back(cmd);
