@@ -102,10 +102,10 @@ const std::vector<BeanBind>& VisionMemory::beanBinds() const {
 
 /**
  * @brief 判断豆子区是否已经缓存到有效结果。
- * @return 至少一个 P1/P2/P3 有效时返回 true。
+ * @return P1/P2/P3 全部有效时返回 true。
  */
 bool VisionMemory::beansReady() const {
-    return cached_beans_.p1.valid || cached_beans_.p2.valid || cached_beans_.p3.valid;
+    return cached_beans_.p1.valid && cached_beans_.p2.valid && cached_beans_.p3.valid;
 }
 
 /**
