@@ -2,12 +2,8 @@
 
 #include "communication/Protocol.h"
 #include "communication/SerialPort.h"
-#include "core/AppConfig.h"
 #include "core/TaskTypes.h"
 #include "core/VisionResult.h"
-#include "detector/BeanNumberDetector.h"
-#include "input/InputManager.h"
-#include "parser/RoiParser.h"
 #include "recognition/RecognitionRunner.h"
 #include "task/TaskGenerator.h"
 #include "task/VisionMemory.h"
@@ -57,40 +53,15 @@ public:
     /**
      * @brief 处理命令行模拟事件。
      * @param line 用户输入的一行命令，例如 arrive_bean。
-     * @param detector 检测器。
-     * @param parser ROI 解析器。
      * @param taskGenerator 任务生成器。
      * @param protocol 协议打包器。
      * @param serial 串口发送模块。
-     * @param config 总配置，用于控制命令模式调试输出。
      * @return 返回 false 表示收到 quit，需要退出命令循环。
      */
     bool processCommand(const std::string& line,
-                        BeanNumberDetector& detector,
-                        RoiParser& parser,
                         TaskGenerator& taskGenerator,
                         Protocol& protocol,
-                        SerialPort& serial,
-                        const AppConfig& config);
-
-    /**
-     * @brief 处理相机调试模式下的终端命令。
-     * @param line 用户输入的一行命令，例如 arrive_bean。
-     * @param detector 检测器。
-     * @param parser ROI 解析器。
-     * @param taskGenerator 任务生成器。
-     * @param protocol 协议打包器。
-     * @param serial 串口发送模块。
-     * @param config 总配置。
-     * @return 返回 false 表示收到 quit，需要退出命令循环。
-     */
-    bool processCameraCommand(const std::string& line,
-                              BeanNumberDetector& detector,
-                              RoiParser& parser,
-                              TaskGenerator& taskGenerator,
-                              Protocol& protocol,
-                              SerialPort& serial,
-                              const AppConfig& config);
+                        SerialPort& serial);
 
     /**
      * @brief 获取当前状态。
@@ -126,27 +97,19 @@ private:
      * @brief 处理“到达豆子区”命令。
      * @param protocol 协议打包器。
      * @param serial 串口发送模块。
-     * @param config 总配置。
-     * @param force_print 是否强制保存调试图片。
      * @return 命令循环是否继续执行。
      */
     bool handleArriveBean(Protocol& protocol,
-                          SerialPort& serial,
-                          const AppConfig& config,
-                          bool force_print);
+                          SerialPort& serial);
 
     /**
      * @brief 处理“到达数字区”命令。
      * @param taskGenerator 任务生成器。
-     * @param config 总配置。
-     * @param force_print 是否强制保存调试图片。
      * @return 命令循环是否继续执行。
      */
     bool handleArriveDigit(TaskGenerator& taskGenerator,
                            Protocol& protocol,
-                           SerialPort& serial,
-                           const AppConfig& config,
-                           bool force_print);
+                           SerialPort& serial);
 
     bool acceptBeanResult(const VisionResult& result,
                           Protocol& protocol,

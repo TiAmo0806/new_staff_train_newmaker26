@@ -154,12 +154,10 @@ std::unique_ptr<RecognitionRunner> makeRecognitionRunner(const AppConfig& config
 void runCommandLoop(CommandSource& commandSource,
                     InputManager& input,
                     TaskStateMachine& taskStateMachine,
-                    BeanNumberDetector& detector,
-                    RoiParser& parser,
                     TaskGenerator& taskGenerator,
                     Protocol& protocol,
                     SerialPort& serial,
-    const AppConfig& config) {
+                    const AppConfig& config) {
     if (config.command.source == "terminal") {
         printTerminalCommands(config);
     } else if (config.command.source == "serial") {
@@ -178,9 +176,7 @@ void runCommandLoop(CommandSource& commandSource,
     std::string line;
     while (commandSource.next(line)) {
         const bool keep_running =
-            camera_command_mode && config.command.source == "terminal"
-                ? taskStateMachine.processCameraCommand(line, detector, parser, taskGenerator, protocol, serial, config)
-                : taskStateMachine.processCommand(line, detector, parser, taskGenerator, protocol, serial, config);
+            taskStateMachine.processCommand(line, taskGenerator, protocol, serial);
         if (!keep_running) {
             break;
         }
@@ -289,7 +285,7 @@ int main(int argc, char** argv) {
 
         std::unique_ptr<CommandSource> commandSource = makeCommandSource(config, serial);
         if (commandSource) {
-            runCommandLoop(*commandSource, input, taskStateMachine, detector, parser, taskGenerator, protocol, serial, config);
+            runCommandLoop(*commandSource, input, taskStateMachine, taskGenerator, protocol, serial, config);
         } else if (!runFrameLoop(input, taskStateMachine, detector, parser, taskGenerator, protocol, serial, config)) {
             serial.close();
             return 1;

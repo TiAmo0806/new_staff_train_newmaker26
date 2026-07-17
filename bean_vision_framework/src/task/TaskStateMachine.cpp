@@ -304,89 +304,54 @@ void TaskStateMachine::process(const VisionResult& current,
 }
 
 bool TaskStateMachine::processCommand(const std::string& line,
-                                      BeanNumberDetector& detector,
-                                      RoiParser& parser,
                                       TaskGenerator& taskGenerator,
                                       Protocol& protocol,
-                                      SerialPort& serial,
-                                      const AppConfig& config) {
-    // 命令格式保持简单：命令名 + 可选调试标记，便于统一终端/串口/相机事件语义。
+                                      SerialPort& serial) {
+    // 命令格式保持简单：命令名，不接受额外业务参数。
     std::istringstream iss(line);
     std::string command;
-    std::string debug_flag;
-    iss >> command >> debug_flag;
-    const bool force_print = debug_flag == "print" || debug_flag == "--print" || debug_flag == "debug";
-
-    (void)detector;
-    (void)parser;
+    std::string extra;
+    iss >> command >> extra;
 
     if (command.empty()) {
         return true;
     }
     if (command == "quit") {
+        if (!extra.empty()) {
+            std::cout << "[WARN] command does not take arguments: " << command << "\n";
+            return true;
+        }
         return false;
     }
     if (command == "reset") {
+        if (!extra.empty()) {
+            std::cout << "[WARN] command does not take arguments: " << command << "\n";
+            return true;
+        }
         reset();
         return true;
     }
     if (command == "arrive_bean") {
+        if (!extra.empty()) {
+            std::cout << "[WARN] command does not take arguments: " << command << "\n";
+            return true;
+        }
         if (state_ != TaskState::WAIT_BEAN_COMMAND) {
             std::cout << "[WARN] expected arrive_digit\n";
             return true;
         }
-        return handleArriveBean(protocol, serial, config, force_print);
+        return handleArriveBean(protocol, serial);
     }
     if (command == "arrive_digit") {
+        if (!extra.empty()) {
+            std::cout << "[WARN] command does not take arguments: " << command << "\n";
+            return true;
+        }
         if (state_ != TaskState::WAIT_DIGIT_COMMAND) {
             std::cout << "[WARN] expected arrive_bean\n";
             return true;
         }
-        return handleArriveDigit(taskGenerator, protocol, serial, config, force_print);
-    }
-
-    std::cout << "[WARN] unknown command: " << command << "\n";
-    return true;
-}
-
-bool TaskStateMachine::processCameraCommand(const std::string& line,
-                                            BeanNumberDetector& detector,
-                                            RoiParser& parser,
-                                            TaskGenerator& taskGenerator,
-                                            Protocol& protocol,
-                                            SerialPort& serial,
-                                            const AppConfig& config) {
-    std::istringstream iss(line);
-    std::string command;
-    std::string debug_flag;
-    iss >> command;
-    iss >> debug_flag;
-
-    if (command.empty()) {
-        return true;
-    }
-    if (command == "quit") {
-        return false;
-    }
-    if (command == "reset") {
-        reset();
-        return true;
-    }
-    if (command == "arrive_bean") {
-        std::string forwarded = "arrive_bean";
-        if (!debug_flag.empty()) {
-            forwarded += " ";
-            forwarded += debug_flag;
-        }
-        return processCommand(forwarded, detector, parser, taskGenerator, protocol, serial, config);
-    }
-    if (command == "arrive_digit") {
-        std::string forwarded = "arrive_digit";
-        if (!debug_flag.empty()) {
-            forwarded += " ";
-            forwarded += debug_flag;
-        }
-        return processCommand(forwarded, detector, parser, taskGenerator, protocol, serial, config);
+        return handleArriveDigit(taskGenerator, protocol, serial);
     }
 
     std::cout << "[WARN] unknown command: " << command << "\n";
@@ -400,13 +365,9 @@ bool TaskStateMachine::processCameraCommand(const std::string& line,
  * @return 返回 true 表示继续等待后续命令。
  */
 bool TaskStateMachine::handleArriveBean(Protocol& protocol,
-                                        SerialPort& serial,
-                                        const AppConfig& config,
-                                        bool force_print) {
+                                        SerialPort& serial) {
     std::cout << "[RX COMMAND] ARRIVE_BEAN\n";
     setState(TaskState::SCAN_BEANS);
-    (void)config;
-    (void)force_print;
 
     VisionResult result;
     if (!runner_.scanBeans(result)) {
@@ -429,11 +390,7 @@ bool TaskStateMachine::handleArriveBean(Protocol& protocol,
  */
 bool TaskStateMachine::handleArriveDigit(TaskGenerator& taskGenerator,
                                          Protocol& protocol,
-                                         SerialPort& serial,
-                                         const AppConfig& config,
-                                         bool force_print) {
-    (void)config;
-    (void)force_print;
+                                         SerialPort& serial) {
     std::cout << "[RX COMMAND] ARRIVE_DIGIT\n";
     setState(TaskState::SCAN_DIGITS);
 
