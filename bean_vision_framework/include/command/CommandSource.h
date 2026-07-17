@@ -13,7 +13,7 @@ public:
 
     /**
      * @brief 读取下一条命令。
-     * @param line 输出命令文本，例如 arrive_bean D:/xxx.png。
+     * @param line 输出命令文本，例如 arrive_bean。
      * @return 成功读取返回 true；需要退出循环时返回 false。
      */
     virtual bool next(std::string& line) = 0;

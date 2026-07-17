@@ -74,9 +74,8 @@ void printMainUsage(const char* app) {
     std::cout << "  real_robot              industrial camera + serial command + real serial\n";
     std::cout << "\n";
     std::cout << "Terminal commands in command-driven modes:\n";
-    std::cout << "  arrive_bean <image_path> [print]\n";
-    std::cout << "  arrive_digit <image_path> [print]\n";
-    std::cout << "  camera mode: arrive_bean / arrive_digit\n";
+    std::cout << "  arrive_bean\n";
+    std::cout << "  arrive_digit\n";
     std::cout << "  reset\n";
     std::cout << "  quit\n";
 }
@@ -91,16 +90,14 @@ void printTerminalCommands(const AppConfig& config) {
         std::cout << "  arrive_digit\n";
         std::cout << "  reset\n";
         std::cout << "  quit\n";
-        std::cout << "[INFO] image path is not required in camera/video mode\n";
         return;
     }
 
     if (isImageStyleInput(config)) {
-        std::cout << "  arrive_bean <image_path>\n";
-        std::cout << "  arrive_digit <image_path>\n";
+        std::cout << "  arrive_bean\n";
+        std::cout << "  arrive_digit\n";
         std::cout << "  reset\n";
         std::cout << "  quit\n";
-        std::cout << "[INFO] optional flag: [print]\n";
         return;
     }
 

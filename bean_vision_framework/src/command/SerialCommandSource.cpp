@@ -36,13 +36,11 @@ bool SerialCommandSource::next(std::string& line) {
         switch (static_cast<ProtocolCommand>(parsed.cmd)) {
         case ProtocolCommand::ArriveBean:
             serial_.writeAck(parsed.cmd, parsed.seq);
-            // Bean 流程当前已迁移到 RecognitionRunner，状态机只要求命令格式保留 image_path 占位。
-            line = "arrive_bean __serial__";
+            line = "arrive_bean";
             return true;
         case ProtocolCommand::ArriveDigit:
             serial_.writeAck(parsed.cmd, parsed.seq);
-            // Digit 流程仍走旧的图片路径逻辑，先保留占位参数格式以维持主循环接线。
-            line = "arrive_digit __serial__";
+            line = "arrive_digit";
             return true;
         case ProtocolCommand::Reset:
             serial_.writeAck(parsed.cmd, parsed.seq);

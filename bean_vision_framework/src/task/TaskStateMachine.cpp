@@ -310,13 +310,15 @@ bool TaskStateMachine::processCommand(const std::string& line,
                                       Protocol& protocol,
                                       SerialPort& serial,
                                       const AppConfig& config) {
-    // 命令格式保持简单：命令名 + 图片路径，便于用终端模拟机器人到位事件。
+    // 命令格式保持简单：命令名 + 可选调试标记，便于统一终端/串口/相机事件语义。
     std::istringstream iss(line);
     std::string command;
-    std::string image_path;
     std::string debug_flag;
-    iss >> command >> image_path >> debug_flag;
+    iss >> command >> debug_flag;
     const bool force_print = debug_flag == "print" || debug_flag == "--print" || debug_flag == "debug";
+
+    (void)detector;
+    (void)parser;
 
     if (command.empty()) {
         return true;
@@ -330,17 +332,17 @@ bool TaskStateMachine::processCommand(const std::string& line,
     }
     if (command == "arrive_bean") {
         if (state_ != TaskState::WAIT_BEAN_COMMAND) {
-            std::cout << "[WARN] expected arrive_digit <image_path>\n";
+            std::cout << "[WARN] expected arrive_digit\n";
             return true;
         }
-        return handleArriveBean(image_path, protocol, serial, config, force_print);
+        return handleArriveBean(protocol, serial, config, force_print);
     }
     if (command == "arrive_digit") {
         if (state_ != TaskState::WAIT_DIGIT_COMMAND) {
-            std::cout << "[WARN] expected arrive_bean <image_path>\n";
+            std::cout << "[WARN] expected arrive_bean\n";
             return true;
         }
-        return handleArriveDigit(image_path, taskGenerator, protocol, serial, config, force_print);
+        return handleArriveDigit(taskGenerator, protocol, serial, config, force_print);
     }
 
     std::cout << "[WARN] unknown command: " << command << "\n";
@@ -356,10 +358,9 @@ bool TaskStateMachine::processCameraCommand(const std::string& line,
                                             const AppConfig& config) {
     std::istringstream iss(line);
     std::string command;
-    std::string image_path;
     std::string debug_flag;
     iss >> command;
-    iss >> image_path >> debug_flag;
+    iss >> debug_flag;
 
     if (command.empty()) {
         return true;
@@ -372,8 +373,7 @@ bool TaskStateMachine::processCameraCommand(const std::string& line,
         return true;
     }
     if (command == "arrive_bean") {
-        std::string forwarded = "arrive_bean ";
-        forwarded += image_path.empty() ? "__camera__" : image_path;
+        std::string forwarded = "arrive_bean";
         if (!debug_flag.empty()) {
             forwarded += " ";
             forwarded += debug_flag;
@@ -381,8 +381,7 @@ bool TaskStateMachine::processCameraCommand(const std::string& line,
         return processCommand(forwarded, detector, parser, taskGenerator, protocol, serial, config);
     }
     if (command == "arrive_digit") {
-        std::string forwarded = "arrive_digit ";
-        forwarded += image_path.empty() ? "__camera__" : image_path;
+        std::string forwarded = "arrive_digit";
         if (!debug_flag.empty()) {
             forwarded += " ";
             forwarded += debug_flag;
@@ -396,24 +395,15 @@ bool TaskStateMachine::processCameraCommand(const std::string& line,
 
 /**
  * @brief 处理豆子区到位事件。
- * @param image_path 豆子区图片路径。
- * @param detector 检测器。
- * @param parser ROI 解析器。
  * @param protocol 协议打包器。
  * @param serial 串口发送模块。
  * @return 返回 true 表示继续等待后续命令。
  */
-bool TaskStateMachine::handleArriveBean(const std::string& image_path,
-                                        Protocol& protocol,
+bool TaskStateMachine::handleArriveBean(Protocol& protocol,
                                         SerialPort& serial,
                                         const AppConfig& config,
                                         bool force_print) {
-    if (image_path.empty()) {
-        std::cout << "[WARN] expected arrive_bean <image_path>\n";
-        return true;
-    }
-
-    std::cout << "[RX COMMAND] ARRIVE_BEAN image=" << image_path << "\n";
+    std::cout << "[RX COMMAND] ARRIVE_BEAN\n";
     setState(TaskState::SCAN_BEANS);
     (void)config;
     (void)force_print;
@@ -432,28 +422,19 @@ bool TaskStateMachine::handleArriveBean(const std::string& image_path,
 
 /**
  * @brief 处理数字区到位事件。
- * @param image_path 数字区图片路径。
- * @param detector 检测器。
- * @param parser ROI 解析器。
  * @param taskGenerator 任务生成器。
  * @param protocol 协议打包器。
  * @param serial 串口发送模块。
  * @return 返回 true 表示继续等待后续命令。
  */
-bool TaskStateMachine::handleArriveDigit(const std::string& image_path,
-                                         TaskGenerator& taskGenerator,
+bool TaskStateMachine::handleArriveDigit(TaskGenerator& taskGenerator,
                                          Protocol& protocol,
                                          SerialPort& serial,
                                          const AppConfig& config,
                                          bool force_print) {
-    if (image_path.empty()) {
-        std::cout << "[WARN] expected arrive_digit <image_path>\n";
-        return true;
-    }
-
     (void)config;
     (void)force_print;
-    std::cout << "[RX COMMAND] ARRIVE_DIGIT image=" << image_path << "\n";
+    std::cout << "[RX COMMAND] ARRIVE_DIGIT\n";
     setState(TaskState::SCAN_DIGITS);
 
     VisionResult result;
