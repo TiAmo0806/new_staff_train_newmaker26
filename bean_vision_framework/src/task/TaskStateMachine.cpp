@@ -508,8 +508,9 @@ bool TaskStateMachine::acceptBeanResult(const VisionResult& result,
         setState(TaskState::WAIT_BEAN_COMMAND);
         return true;
     }
-    if (memory_.beanBinds().empty()) {
-        std::cout << "[ERROR] bean binds are empty, skip BEAN_BIND send\n";
+    if (memory_.beanBinds().size() != 3) {
+        std::cout << "[ERROR] incomplete bean binds count=" << memory_.beanBinds().size()
+                  << " expected=3, skip BEAN_BIND send\n";
         setState(TaskState::WAIT_BEAN_COMMAND);
         return true;
     }
