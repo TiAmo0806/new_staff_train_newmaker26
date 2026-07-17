@@ -178,6 +178,23 @@ void validateScanConfig(const ScanConfig& scan) {
 }
 
 /**
+ * @brief 校验输入类型是否合法。
+ * @param input 输入配置。
+ * @throws std::invalid_argument 当 input.type 不是允许值时抛出。
+ */
+void validateInputConfig(const InputConfig& input) {
+    if (input.type != "mock" &&
+        input.type != "image" &&
+        input.type != "video" &&
+        input.type != "camera" &&
+        input.type != "mindvision_camera") {
+        throw std::invalid_argument(
+            "[CONFIG ERROR] input.type must be one of {mock, image, video, camera, mindvision_camera}, actual=" +
+            input.type);
+    }
+}
+
+/**
  * @brief 校验命令来源配置是否合法。
  * @param command 命令来源配置。
  * @throws std::invalid_argument 当 command.source 不是允许值时抛出。
@@ -190,6 +207,50 @@ void validateCommandConfig(const CommandConfig& command) {
             "[CONFIG ERROR] command.source must be one of {terminal, serial, none}, actual=" +
             command.source);
     }
+}
+
+/**
+ * @brief 校验单个必需 ROI 是否存在且矩形有效。
+ * @param rois ROI 表。
+ * @param roi_name 必需 ROI 名称。
+ * @param section_name 配置分区名，例如 pickup 或 place。
+ * @throws std::invalid_argument 当缺少必需 ROI 或矩形非法时抛出。
+ */
+void validateRequiredRoi(const std::map<std::string, cv::Rect>& rois,
+                         const std::string& roi_name,
+                         const std::string& section_name) {
+    const auto it = rois.find(roi_name);
+    if (it == rois.end()) {
+        throw std::invalid_argument(
+            "[CONFIG ERROR] missing required " + section_name + " ROI: " + roi_name);
+    }
+
+    const cv::Rect& rect = it->second;
+    if (rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0) {
+        throw std::invalid_argument(
+            "[CONFIG ERROR] invalid ROI " + roi_name +
+            ": x=" + std::to_string(rect.x) +
+            ", y=" + std::to_string(rect.y) +
+            ", width=" + std::to_string(rect.width) +
+            ", height=" + std::to_string(rect.height));
+    }
+}
+
+/**
+ * @brief 校验 ROI 结构完整性和基本矩形合法性。
+ * @param roi ROI 配置。
+ * @throws std::invalid_argument 当缺少必需键或矩形非法时抛出。
+ */
+void validateRoiConfig(const RoiConfig& roi) {
+    validateRequiredRoi(roi.pickup_rois, "P1", "pickup");
+    validateRequiredRoi(roi.pickup_rois, "P2", "pickup");
+    validateRequiredRoi(roi.pickup_rois, "P3", "pickup");
+
+    validateRequiredRoi(roi.place_rois, "L4", "place");
+    validateRequiredRoi(roi.place_rois, "L5", "place");
+    validateRequiredRoi(roi.place_rois, "L6", "place");
+    validateRequiredRoi(roi.place_rois, "L7", "place");
+    validateRequiredRoi(roi.place_rois, "L8", "place");
 }
 
 /**
@@ -565,6 +626,8 @@ AppConfig AppConfig::load(const std::string& path) {
         }
     }
 
+    validateInputConfig(config.input);
+
     // app.yaml 只告诉我们子配置文件在哪里，这里继续加载子配置。
     loadClasses(resolvePath(base_dir, config.detector.class_file), config.detector);
     if (!config.input.source.empty()) {
@@ -580,6 +643,7 @@ AppConfig AppConfig::load(const std::string& path) {
         config.detector.model_path = resolvePath(base_dir, config.detector.model_path).string();
     }
     loadRois(resolvePath(base_dir, roi_file), config.roi);
+    validateRoiConfig(config.roi);
     if (!serial_file.empty()) {
         loadSerial(resolvePath(base_dir, serial_file), config.serial);
     }
