@@ -95,7 +95,11 @@ TaskResult TaskGenerator::generate(const VisionResult& vision) {
         result.tasks.push_back(task);
     }
 
-    result.success = !result.tasks.empty();
-    result.reason = result.success ? "ok" : "no_task_generated";
+    result.success = result.tasks.size() == 3;
+    if (result.success) {
+        result.reason = "ok";
+    } else if (result.reason.empty()) {
+        result.reason = "incomplete_task_count";
+    }
     return result;
 }
