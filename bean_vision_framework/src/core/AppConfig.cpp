@@ -178,6 +178,21 @@ void validateScanConfig(const ScanConfig& scan) {
 }
 
 /**
+ * @brief 校验命令来源配置是否合法。
+ * @param command 命令来源配置。
+ * @throws std::invalid_argument 当 command.source 不是允许值时抛出。
+ */
+void validateCommandConfig(const CommandConfig& command) {
+    if (command.source != "terminal" &&
+        command.source != "serial" &&
+        command.source != "none") {
+        throw std::invalid_argument(
+            "[CONFIG ERROR] command.source must be one of {terminal, serial, none}, actual=" +
+            command.source);
+    }
+}
+
+/**
  * @brief 加载类别名称和别名映射。
  * @param path classes.yaml 路径。
  * @param detector 输入输出参数，会写入 names 和 aliases。
@@ -572,6 +587,7 @@ AppConfig AppConfig::load(const std::string& path) {
     config.serial.print_rx_hex = config.debug.print_rx_hex;
     config.serial.print_tx_hex = config.debug.print_tx_hex || config.debug.print_packet_hex;
     config.serial.print_parsed_packet = config.debug.print_parsed_packet;
+    validateCommandConfig(config.command);
     validateScanConfig(config.scan);
     return config;
 }
