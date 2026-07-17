@@ -13,7 +13,7 @@ camera:
   fps: 30
   exposure:
     auto: false
-    time: 15000
+    time: 20000
   gain:
     auto: false
     value: 3.0
@@ -29,10 +29,10 @@ roi:
 
 detector:
   backend: "onnxruntime"
-  model_path: "../bisai/bean_digit_v1_verified_20260624/best4.onnx"
+  model_path: "../bisai/bean_digit_v1_verified_20260624/best6.onnx"
   conf_threshold: 0.25
   nms_threshold: 0.45
-  intra_op_threads: 2
+  intra_op_threads: 3
   performance_logging: true
   performance_log_interval: 30
   performance_window_size: 120

@@ -3,7 +3,7 @@ runtime:
 
 input:
   type: "image"
-  source: "data/test.jpg"
+  source: "data/data/src001_train_000003.png"
   camera_id: 0
 
 camera:
@@ -23,7 +23,7 @@ detector:
   model_path: "../bisai/bean_digit_v1_verified_20260624/best.onnx"
   conf_threshold: 0.25
   nms_threshold: 0.45
-  class_file: "config/roi_single_view_4.yaml"
+  class_file: "config/classes.yaml"
 
 roi:
   file: "config/roi.yaml"
