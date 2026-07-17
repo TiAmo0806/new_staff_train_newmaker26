@@ -289,6 +289,16 @@ bool SerialPort::tryExtractPacket(std::vector<uint8_t>& packet) {
             rx_buffer_.erase(rx_buffer_.begin());
             continue;
         }
+        size_t expected_length = 0;
+        if (Protocol::expectedPayloadLength(rx_buffer_[1], expected_length) &&
+            declared_length != expected_length) {
+            std::cout << "[WARN] drop frame header: cmd="
+                      << Protocol::commandName(rx_buffer_[1])
+                      << " payload length=" << declared_length
+                      << " expected=" << expected_length << ", resync\n";
+            rx_buffer_.erase(rx_buffer_.begin());
+            continue;
+        }
 
         const size_t expected_size = 4U + declared_length + 2U;
         if (rx_buffer_.size() < expected_size) {

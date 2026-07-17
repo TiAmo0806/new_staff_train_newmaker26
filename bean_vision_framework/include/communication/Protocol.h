@@ -37,6 +37,7 @@ public:
     static constexpr size_t kMaxPayloadLength = 11;
 
     static const char* commandName(uint8_t cmd);
+    static bool expectedPayloadLength(uint8_t cmd, size_t& expected_length);
 
     /**
      * @brief 将视觉结果打包成协议帧。

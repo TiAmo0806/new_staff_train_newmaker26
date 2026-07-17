@@ -12,20 +12,8 @@
 namespace {
 
 bool isKnownCommand(uint8_t cmd) {
-    switch (static_cast<ProtocolCommand>(cmd)) {
-    case ProtocolCommand::Vision:
-    case ProtocolCommand::FinalTask:
-    case ProtocolCommand::Error:
-    case ProtocolCommand::BeanBind:
-    case ProtocolCommand::Pong:
-    case ProtocolCommand::ArriveBean:
-    case ProtocolCommand::ArriveDigit:
-    case ProtocolCommand::Reset:
-    case ProtocolCommand::Ping:
-    case ProtocolCommand::Ack:
-        return true;
-    }
-    return false;
+    size_t expected_length = 0;
+    return Protocol::expectedPayloadLength(cmd, expected_length);
 }
 
 std::string hexByte(uint8_t value) {
@@ -61,6 +49,34 @@ const char* Protocol::commandName(uint8_t cmd) {
         return "ACK";
     }
     return "UNKNOWN";
+}
+
+bool Protocol::expectedPayloadLength(uint8_t cmd, size_t& expected_length) {
+    switch (static_cast<ProtocolCommand>(cmd)) {
+    case ProtocolCommand::Vision:
+        expected_length = 9;
+        return true;
+    case ProtocolCommand::FinalTask:
+        expected_length = 11;
+        return true;
+    case ProtocolCommand::Error:
+        expected_length = 1;
+        return true;
+    case ProtocolCommand::BeanBind:
+        expected_length = 10;
+        return true;
+    case ProtocolCommand::Pong:
+    case ProtocolCommand::ArriveBean:
+    case ProtocolCommand::ArriveDigit:
+    case ProtocolCommand::Reset:
+    case ProtocolCommand::Ping:
+        expected_length = 0;
+        return true;
+    case ProtocolCommand::Ack:
+        expected_length = 2;
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -243,6 +259,16 @@ ParsedPacket Protocol::parsePacket(const std::vector<uint8_t>& packet) const {
         return parsed;
     }
 
+    size_t expected_length = 0;
+    if (expectedPayloadLength(parsed.cmd, expected_length) &&
+        static_cast<size_t>(parsed.length) != expected_length) {
+        parsed.reason = "bad_command_length";
+        std::cout << "[WARN] drop frame: cmd=" << commandName(parsed.cmd)
+                  << " payload length=" << static_cast<int>(parsed.length)
+                  << " expected=" << expected_length << "\n";
+        return parsed;
+    }
+
     parsed.payload.assign(packet.begin() + 4, packet.end() - 2);
     parsed.valid = true;
     parsed.reason = "ok";
@@ -265,6 +291,13 @@ std::vector<uint8_t> Protocol::makePacket(uint8_t cmd, const std::vector<uint8_t
         throw std::invalid_argument(
             "Protocol payload too large: actual=" + std::to_string(payload.size()) +
             ", max=" + std::to_string(Protocol::kMaxPayloadLength));
+    }
+    size_t expected_length = 0;
+    if (expectedPayloadLength(cmd, expected_length) && payload.size() != expected_length) {
+        throw std::invalid_argument(
+            "Protocol payload length mismatch: cmd=" + std::string(commandName(cmd)) +
+            ", actual=" + std::to_string(payload.size()) +
+            ", expected=" + std::to_string(expected_length));
     }
 
     std::vector<uint8_t> packet;
