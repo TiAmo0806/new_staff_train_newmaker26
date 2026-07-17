@@ -1,16 +1,16 @@
 /**
  * @file    line_follow.c
- * @brief   单传感器沿边循迹 PID + 路面标记识别
+ * @brief   8 路巡线模块 ×2 — PID + 路面标记识别
  *
- * 与8路横排版本的核心区别:
- *   1. 单传感器边沿跟踪 (非8路暗度质心)
- *   2. 前后传感器可动态切换 (SwapSensors 真正生效)
- *   3. 修正方向根据 (方向, 活跃传感器) 组合自动取反
- *   4. 标记识别基于活跃传感器的值-时间状态机
+ * 传感器: 前(USART2) + 后(USART3) 各一个 8 路巡线模块
+ * PID 输入: 活跃传感器的线位置 (0.0~7.0)
+ * 误差 = (线位置 − 3.5) × LINE_POS_KP
+ * 标记识别: 基于活跃传感器的 black_count / refl_count
  */
 
 #include "line_follow.h"
 #include "main.h"
+#include <stdio.h>
 #include <string.h>
 
 static LineFollower_t g_lf;
@@ -18,77 +18,53 @@ static LineFollower_t g_lf;
 /*=================================================================
  * 黑通道 — 检测大面积黑 / T形 / 双黑脉冲 (||)
  *
- * 基于活跃传感器的 is_black 标志
+ * 基于活跃传感器的 black_count
  * 状态机: IDLE(0) → IN_BLACK(1) → JUST_LEFT(2) → IDLE
  *
- * 单脉冲: 进入黑→离开→窗口超时→评估 (大面积/T形)
- * 双脉冲: 进入黑→离开→再进入→离开→窗口超时→评估 (||豆子箱)
+ * 单脉冲: ≥4路黑进入→ <4路黑离开→窗口超时→评估
+ * 双脉冲: 离开→再进入→再离开→窗口超时→评估 (||豆子箱)
  *=================================================================*/
-#define BK_PULSE_MAX            4       /* 脉冲时间戳缓冲大小 */
+#define BK_ENTER_THRESHOLD    4           /* ≥4 路黑 → 进入黑脉冲 */
+#define BK_LARGE_THRESHOLD    6           /* ≥6 路黑 → 大面积 (上断点) */
+#define BK_PULSE_MAX          4
 
-static uint8_t  g_bk_state;            /* 0=IDLE 1=IN_BLACK 2=JUST_LEFT */
-static uint32_t g_bk_enter;            /* 进入黑区时刻 (ms) */
-static uint32_t g_bk_leave;            /* 离开黑区时刻 (ms) */
+static uint8_t  g_bk_state;              /* 0=IDLE 1=IN_BLACK 2=JUST_LEFT */
+static uint32_t g_bk_enter;              /* 进入黑区时刻 (ms) */
+static uint32_t g_bk_leave;              /* 离开黑区时刻 (ms) */
 
-/* 双脉冲记录 (豆子箱||) */
 static uint32_t g_bk_pulse_times[BK_PULSE_MAX];
 static uint8_t  g_bk_pulse_cnt;
 
 /*=================================================================
  * 反光通道 — 检测小断点 / 下断点 / 双白横条(||)
  *
- * 基于活跃传感器的 is_reflective 标志
+ * 基于活跃传感器的 refl_count
  * 脉冲状态机 (和黑通道平行):
  *   IDLE(0) → IN_REFL(1) → JUST_LEFT(2) → 窗口超时→评估→IDLE
- *   单脉冲: REFL_SINGLE / REFL_LARGE
- *   双脉冲: ROAD_WHITE_DOUBLE (双白横条||)
  *=================================================================*/
-#define RF_PULSE_MAX            4
+#define RF_ENTER_THRESHOLD    1           /* ≥1 路反光 → 进入反光脉冲 */
+#define RF_LARGE_THRESHOLD    4           /* ≥4 路反光 → 大面积 (下断点) */
+#define RF_PULSE_MAX          4
 
-static uint8_t  g_rf_state;            /* 0=IDLE 1=IN_REFL 2=JUST_LEFT */
+static uint8_t  g_rf_state;
 static uint32_t g_rf_enter;
 static uint32_t g_rf_leave;
 
-/* 双脉冲记录 (双白横条||) */
 static uint32_t g_rf_pulse_times[RF_PULSE_MAX];
 static uint8_t  g_rf_pulse_cnt;
 
 /*=================================================================
  * 脱线
  *=================================================================*/
-static uint32_t g_lost_tick;           /* 连续白区 tick 计数 */
+static uint32_t g_lost_tick;
 
 /*=================================================================
- * 内部: 获取活跃传感器
+ * 内部: 获取活跃传感器的数据
  *=================================================================*/
 static const SingleSensor_t* active_sensor_ptr(void)
 {
     return (g_lf.active_sensor == ACTIVE_FRONT)
         ? Sensor_GetFront() : Sensor_GetRear();
-}
-
-/*=================================================================
- * 内部: 获取活跃传感器原始值
- *=================================================================*/
-static uint16_t active_sensor_value(void)
-{
-    return (g_lf.active_sensor == ACTIVE_FRONT)
-        ? Sensor_ReadFront() : Sensor_ReadRear();
-}
-
-/*=================================================================
- * 内部: 获取活跃传感器的 is_black / is_reflective
- *=================================================================*/
-static uint8_t active_is_black(void)
-{
-    return (g_lf.active_sensor == ACTIVE_FRONT)
-        ? Sensor_IsFrontBlack() : Sensor_IsRearBlack();
-}
-
-static uint8_t active_is_reflective(void)
-{
-    return (g_lf.active_sensor == ACTIVE_FRONT)
-        ? Sensor_IsFrontReflective() : Sensor_IsRearReflective();
 }
 
 /*=================================================================
@@ -112,7 +88,7 @@ void LineFollow_Init(void)
 {
     memset(&g_lf, 0, sizeof(g_lf));
     g_lf.direction     = DIR_FORWARD;
-    g_lf.active_sensor = ACTIVE_FRONT;      /* 默认前进用车头传感器 */
+    g_lf.active_sensor = ACTIVE_FRONT;
     g_lf.base_speed    = BASE_SPEED_FORWARD_RPM;
     g_lf.pid.kp        = KP_FORWARD;
     g_lf.pid.kd        = KD_FORWARD;
@@ -120,52 +96,31 @@ void LineFollow_Init(void)
     reset_all();
 
 #if DEBUG_ENABLE
-    printf("[LF] Single-sensor edge-follow. Active=%s\r\n",
+    printf("[LF] 8ch×2 modules. Active=%s\r\n",
            g_lf.active_sensor == ACTIVE_FRONT ? "FRONT" : "REAR");
-    printf("[LF]   Kp=%.2f Kd=%.2f BaseSpd=%d MaxCorr=%d\r\n",
+    printf("[LF]   Kp=%.2f Kd=%.2f PosTarget=%.1f PosKp=%.1f\r\n",
            (double)KP_FORWARD, (double)KD_FORWARD,
-           BASE_SPEED_FORWARD_RPM, MAX_CORRECTION_RPM);
-    printf("[LF]   UP: black >%lums | T: black %lu~%lums\r\n",
-           (unsigned long)BK_LARGE_MIN_MS,
-           (unsigned long)BK_T_JUNCTION_MIN_MS,
-           (unsigned long)BK_T_JUNCTION_MAX_MS);
-    printf("[LF]   Bean||: 2×black pulse <%lums\r\n",
-           (unsigned long)RF_DOUBLE_WINDOW_MS);
-    printf("[LF]   Stop: refl %lu~%lums | LO: refl >%lums\r\n",
-           (unsigned long)RF_SINGLE_MIN_MS,
-           (unsigned long)RF_SINGLE_MAX_MS,
-           (unsigned long)RF_LARGE_MIN_MS);
-    printf("[LF]   White||: 2×refl pulse <%lums\r\n",
-           (unsigned long)RF_DOUBLE_WINDOW_MS);
+           LINE_POS_TARGET, LINE_POS_KP);
+    printf("[LF]   BK: enter>=%d large>=%d | RF: enter>=%d large>=%d\r\n",
+           BK_ENTER_THRESHOLD, BK_LARGE_THRESHOLD,
+           RF_ENTER_THRESHOLD, RF_LARGE_THRESHOLD);
 #endif
 }
 
 /*=================================================================
- * PID — 单传感器边沿跟踪
+ * PID — 8 路线位置 → 修正量
  *
- * 输入: 活跃传感器原始值
- * 误差 = raw_value − target (target 来自传感器校准)
- * 修正 = Kp × 误差 + Kd × d误差
- *
- * 修正取反规则:
- *   "预期传感器": 前进→前, 后退→后
- *   活跃传感器 ≠ 预期传感器 → 修正取反
- *
- *   前进+前 → 正常  (fl=+base+corr, fr=+base-corr)
- *   前进+后 → 取反  (fl=+base-corr, fr=+base+corr)
- *   后退+后 → 正常  (fl=-base+corr, fr=-base-corr)
- *   后退+前 → 取反  (fl=-base-corr, fr=-base+corr)
+ * 线位置 0(左)~7(右), 目标 3.5(中心)
+ * 误差 = (线位置 − 目标) × Kp_scaler
  *=================================================================*/
-static int16_t PID_Compute(uint16_t raw_value)
+static int16_t PID_Compute(float line_pos)
 {
-    const SingleSensor_t* s = active_sensor_ptr();
-    float err = (float)((int32_t)raw_value - (int32_t)s->target);
+    float err   = (line_pos - LINE_POS_TARGET) * LINE_POS_KP;
     float d_err = err - g_lf.pid.last_error;
-    float corr = g_lf.pid.kp * err + g_lf.pid.kd * d_err;
+    float corr  = g_lf.pid.kp * err + g_lf.pid.kd * d_err;
 
     g_lf.pid.last_error = err;
 
-    /* 限幅 */
     if (corr > (float)MAX_CORRECTION_RPM) corr = (float)MAX_CORRECTION_RPM;
     if (corr < -(float)MAX_CORRECTION_RPM) corr = -(float)MAX_CORRECTION_RPM;
 
@@ -183,52 +138,45 @@ int32_t LineFollow_Update(RoadFeature_t* feature_out)
 
     /* 1. 更新传感器 */
     Sensor_Update();
-    uint16_t raw_val = active_sensor_value();
-    uint8_t  is_bk  = active_is_black();
-    uint8_t  is_rf  = active_is_reflective();
-    uint32_t now     = HAL_GetTick();
+    const SingleSensor_t* s = active_sensor_ptr();
+    float    line_pos = s->line_position;
+    uint8_t  bk_cnt   = s->black_count;
+    uint8_t  rf_cnt   = s->refl_count;
+    uint32_t now      = HAL_GetTick();
 
     RoadFeature_t fea = ROAD_NORMAL;
 
     /*=================================================================
      * 通道1: 黑色检测 (脉冲状态机)
      *
-     * IDLE(0) → is_black→IN_BLACK(1) → !is_black→JUST_LEFT(2)
-     *   → 窗口超时→评估→IDLE
-     *   → 再次is_black→记录脉冲→IN_BLACK→...
+     * 进入条件: bk_cnt >= BK_ENTER_THRESHOLD (4路黑)
+     * 离开条件: bk_cnt <  BK_ENTER_THRESHOLD
      *=================================================================*/
     switch (g_bk_state) {
 
-    case 0: /* IDLE — 等待进入黑区 */
-        if (is_bk) {
+    case 0: /* IDLE */
+        if (bk_cnt >= BK_ENTER_THRESHOLD) {
             g_bk_state = 1;
             g_bk_enter = now;
         }
         break;
 
-    case 1: /* IN_BLACK — 持续黑中 */
-        if (!is_bk) {
-            /* 离开黑区 → 记录本次脉冲离开时间 */
+    case 1: /* IN_BLACK */
+        if (bk_cnt < BK_ENTER_THRESHOLD) {
             g_bk_state = 2;
             g_bk_leave = now;
-
-            /* 记录脉冲时间戳 */
             if (g_bk_pulse_cnt < BK_PULSE_MAX) {
                 g_bk_pulse_times[g_bk_pulse_cnt++] = now;
             }
         }
         break;
 
-    case 2: /* JUST_LEFT — 在白区, 等窗口关闭或再次进入 */
-        if (is_bk) {
-            /* 再次进入黑区 → 可能的双脉冲 */
+    case 2: /* JUST_LEFT — 等窗口关闭或再次进入 */
+        if (bk_cnt >= BK_ENTER_THRESHOLD) {
             g_bk_state = 1;
             g_bk_enter = now;
         } else {
-            /* 仍在白区, 检查窗口是否超时 */
-            uint32_t elapsed = now - g_bk_leave;
-            if (elapsed > REFL_PULSE_WINDOW_MS) {
-                /* 窗口超时 → 最终评估 */
+            if (now - g_bk_leave > RF_DOUBLE_WINDOW_MS) {
                 goto evaluate_black;
             }
         }
@@ -239,7 +187,6 @@ int32_t LineFollow_Update(RoadFeature_t* feature_out)
 
 evaluate_black:
     {
-        /* 本次黑事件总持续时间 */
         uint32_t dur = (g_bk_leave > g_bk_enter)
             ? (g_bk_leave - g_bk_enter) : 0;
 
@@ -250,22 +197,22 @@ evaluate_black:
         }
 #endif
 
-        /* ── 大面积黑: >BK_LARGE_MIN_MS → 上断点 ── */
+        /* ── 大面积黑: ≥6路黑 >BK_LARGE_MIN_MS → 上断点 ── */
         if (dur >= BK_LARGE_MIN_MS) {
             fea = ROAD_UPPER_CHECK;
         }
-        /* ── T形路口: 250~800ms ── */
-        else if (dur >= T_JUNCTION_MIN_MS && dur <= T_JUNCTION_MAX_MS) {
+        /* ── T形: 4-5路黑 时间在窗口内 ── */
+        else if (dur >= BK_T_JUNCTION_MIN_MS && dur <= BK_T_JUNCTION_MAX_MS) {
             fea = ROAD_T_JUNCTION;
         }
+
         /* ── 双黑脉冲 (||豆子箱): 2次脉冲在窗口内 ── */
         if (g_bk_pulse_cnt >= 2 && fea == ROAD_NORMAL) {
-            uint32_t window_elapsed = now - g_bk_pulse_times[0];
-            if (window_elapsed <= REFL_PULSE_WINDOW_MS) {
+            if (now - g_bk_pulse_times[0] <= RF_DOUBLE_WINDOW_MS) {
                 fea = ROAD_BLACK_DOUBLE;
 #if DEBUG_ENABLE
                 printf("[LF] ★★ BEAN|| (2 pulses in %lums) ★★\r\n",
-                       (unsigned long)window_elapsed);
+                       (unsigned long)(now - g_bk_pulse_times[0]));
 #endif
             }
         }
@@ -281,42 +228,33 @@ after_black:
     /*=================================================================
      * 通道2: 反光检测 (脉冲状态机)
      *
-     * IDLE(0) → is_rf→IN_REFL(1) → !is_rf→JUST_LEFT(2)
-     *   → 窗口超时→评估→IDLE
-     *   → 再次is_rf→记录脉冲→IN_REFL→...
-     *
-     * 单脉冲: REFL_SINGLE / REFL_LARGE
-     * 双脉冲: ROAD_WHITE_DOUBLE (双白横条||)
+     * 进入条件: rf_cnt >= RF_ENTER_THRESHOLD (1路反光)
      *=================================================================*/
     switch (g_rf_state) {
 
-    case 0: /* IDLE — 等待进入反光区 */
-        if (is_rf) {
+    case 0: /* IDLE */
+        if (rf_cnt >= RF_ENTER_THRESHOLD) {
             g_rf_state = 1;
             g_rf_enter = now;
         }
         break;
 
-    case 1: /* IN_REFL — 持续反光中 */
-        if (!is_rf) {
+    case 1: /* IN_REFL */
+        if (rf_cnt < RF_ENTER_THRESHOLD) {
             g_rf_state = 2;
             g_rf_leave = now;
-            /* 记录脉冲 */
             if (g_rf_pulse_cnt < RF_PULSE_MAX) {
                 g_rf_pulse_times[g_rf_pulse_cnt++] = now;
             }
         }
         break;
 
-    case 2: /* JUST_LEFT — 已离开反光, 等窗口关闭或再次进入 */
-        if (is_rf) {
-            /* 再次进入反光 → 双脉冲候选 */
+    case 2: /* JUST_LEFT — 等窗口关闭或再次进入 */
+        if (rf_cnt >= RF_ENTER_THRESHOLD) {
             g_rf_state = 1;
             g_rf_enter = now;
         } else {
-            uint32_t elapsed = now - g_rf_leave;
-            if (elapsed > REFL_PULSE_WINDOW_MS) {
-                /* 窗口超时 → 最终评估 */
+            if (now - g_rf_leave > RF_DOUBLE_WINDOW_MS) {
                 goto evaluate_reflective;
             }
         }
@@ -337,24 +275,23 @@ evaluate_reflective:
         }
 #endif
 
-        /* ── 双白横条(||): 优先判断, 2次脉冲在窗口内 ── */
+        /* ── 双白横条(||): 优先判断 ── */
         if (g_rf_pulse_cnt >= 2) {
-            uint32_t window_elapsed = now - g_rf_pulse_times[0];
-            if (window_elapsed <= RF_DOUBLE_WINDOW_MS) {
+            if (now - g_rf_pulse_times[0] <= RF_DOUBLE_WINDOW_MS) {
                 fea = ROAD_WHITE_DOUBLE;
 #if DEBUG_ENABLE
                 printf("[LF] ★★ WHITE|| (2 pulses in %lums) ★★\r\n",
-                       (unsigned long)window_elapsed);
+                       (unsigned long)(now - g_rf_pulse_times[0]));
 #endif
                 goto rf_done;
             }
         }
 
-        /* ── 大面积反光: >RF_LARGE_MIN_MS → 下断点 ── */
+        /* ── 大面积反光: ≥4路 >RF_LARGE_MIN_MS → 下断点 ── */
         if (dur >= RF_LARGE_MIN_MS) {
             fea = ROAD_REFL_LARGE;
         }
-        /* ── 小断点: 30~400ms ── */
+        /* ── 小断点: 1-3路反光 30~400ms ── */
         else if (dur >= RF_SINGLE_MIN_MS && dur <= RF_SINGLE_MAX_MS) {
             if (fea == ROAD_NORMAL) {
                 fea = ROAD_REFL_SINGLE;
@@ -371,24 +308,15 @@ rf_done:
 after_reflective:
 
     /*=================================================================
-     * 脱线检测
-     *
-     *   传感器全白 (raw >= WHITE_THRESHOLD) 且非反光 → 离线路面
-     *   传感器在边沿 (BLACK<raw<WHITE) → 正常循迹, 清零计数
-     *   传感器在反光区 → 特殊标记, 清零计数
+     * 脱线检测 — 0 路黑持续超时
      *=================================================================*/
-    if (is_bk || is_rf) {
-        /* 黑区或反光区: 在标记上 */
-        g_lost_tick = 0;
-    } else if (raw_val >= WHITE_THRESHOLD) {
-        /* 全白路面: 脱线累计 */
+    if (bk_cnt == 0) {
         g_lost_tick++;
         if (g_lost_tick >= (LOST_LINE_TIMEOUT_MS / SYSTICK_PERIOD_MS)) {
             fea = ROAD_LOST_LINE;
             g_lost_tick = 0;
         }
     } else {
-        /* 边沿跟踪区 (BLACK<raw<WHITE): 正常循迹, 保持计数为零 */
         g_lost_tick = 0;
     }
 
@@ -396,19 +324,17 @@ after_reflective:
      * Debug 输出
      *=================================================================*/
 #if DEBUG_ENABLE
-    static uint32_t dbg_counter = 0;
-    if (++dbg_counter % 40 == 0) {
-        printf("[LF] %s raw=%4d tgt=%d err=%.1f bk=%d rf=%d\r\n",
+    static uint32_t dbg_cnt = 0;
+    if (++dbg_cnt % 40 == 0) {
+        printf("[LF] %s pos=%.2f bk=%d rf=%d err=%.1f\r\n",
                g_lf.active_sensor == ACTIVE_FRONT ? "F" : "R",
-               (int)raw_val,
-               (int)active_sensor_ptr()->target,
-               (double)g_lf.pid.last_error,
-               (int)is_bk, (int)is_rf);
+               (double)line_pos, (int)bk_cnt, (int)rf_cnt,
+               (double)g_lf.pid.last_error);
     }
     if (fea != ROAD_NORMAL) {
-        printf("[LF] ★ %s (raw=%d bk=%d rf=%d active=%s)\r\n",
+        printf("[LF] ★ %s (pos=%.2f bk=%d rf=%d active=%s)\r\n",
                LineFollow_FeatureName(fea),
-               (int)raw_val, (int)is_bk, (int)is_rf,
+               (double)line_pos, (int)bk_cnt, (int)rf_cnt,
                g_lf.active_sensor == ACTIVE_FRONT ? "F" : "R");
     }
 #endif
@@ -418,32 +344,23 @@ after_reflective:
     /*=================================================================
      * PID 控制 → 电机
      *
-     * 修正取反判断:
+     * 修正取反:
      *   活跃传感器 == 预期传感器 → 正常
      *   活跃传感器 != 预期传感器 → 取反
-     *
      *   预期传感器: 前进→FRONT, 后退→REAR
      *=================================================================*/
     int16_t corr;
     ActiveSensor_t expected = (g_lf.direction == DIR_FORWARD)
         ? ACTIVE_FRONT : ACTIVE_REAR;
 
-    if (!is_bk && !is_rf) {
-        /* 脱线: 使用上次修正量 (惯性保持) */
-        corr = g_lf.pid.correction;
-    } else if (is_bk && raw_val < BLACK_THRESHOLD) {
-        /*
-         * 大面积黑 → 停止修正, 直走
-         * 但如果是窄黑线 (正常循迹), 继续PID
-         * 通过黑区持续时间判断: 大面积黑已在标记检测中触发
-         * 这里保持PID正常运转
-         */
-        corr = PID_Compute(raw_val);
+    if (bk_cnt == 0) {
+        corr = g_lf.pid.correction;        /* 脱线惯性保持 */
+    } else if (bk_cnt >= BK_LARGE_THRESHOLD || rf_cnt >= RF_LARGE_THRESHOLD) {
+        corr = 0;                          /* 大面积黑/反光 → 直走 */
     } else {
-        corr = PID_Compute(raw_val);
+        corr = PID_Compute(line_pos);
     }
 
-    /* 修正取反 */
     if (g_lf.active_sensor != expected) {
         corr = -corr;
     }
@@ -453,12 +370,12 @@ after_reflective:
 }
 
 /*=================================================================
- * 模式设置
+ * 模式设置 (不变)
  *=================================================================*/
 void LineFollow_SetForward(void)
 {
     g_lf.direction     = DIR_FORWARD;
-    g_lf.active_sensor = ACTIVE_FRONT;    /* 默认前进用车头 */
+    g_lf.active_sensor = ACTIVE_FRONT;
     g_lf.base_speed    = BASE_SPEED_FORWARD_RPM;
     g_lf.pid.kp        = KP_FORWARD;
     g_lf.pid.kd        = KD_FORWARD;
@@ -476,7 +393,7 @@ void LineFollow_SetForward(void)
 void LineFollow_SetBackward(void)
 {
     g_lf.direction     = DIR_BACKWARD;
-    g_lf.active_sensor = ACTIVE_REAR;     /* 默认后退用车尾 */
+    g_lf.active_sensor = ACTIVE_REAR;
     g_lf.base_speed    = BASE_SPEED_BACKWARD_RPM;
     g_lf.pid.kp        = KP_BACKWARD;
     g_lf.pid.kd        = KD_BACKWARD;
@@ -500,9 +417,6 @@ void LineFollow_Stop(void)
 #endif
 }
 
-/**
- * @brief 恢复前进 — 不改变 active_sensor
- */
 void LineFollow_ResumeForward(void)
 {
     g_lf.direction     = DIR_FORWARD;
@@ -513,19 +427,8 @@ void LineFollow_ResumeForward(void)
     g_lf.pid.correction = 0;
     g_lf.is_active      = 1;
     reset_all();
-#if DEBUG_ENABLE
-    printf("[LF] → Resume FORWARD (active=%s base=%d)\r\n",
-           g_lf.active_sensor == ACTIVE_FRONT ? "FRONT" : "REAR",
-           g_lf.base_speed);
-#endif
 }
 
-/**
- * @brief 恢复后退 — 不改变 active_sensor
- *
- * 用于从 BEAN_DONE 返回循迹时 (SwapSensors 已设置 active_sensor):
- *   Swap后 active=REAR, 后退时后传感器"领路", 修正自动正常
- */
 void LineFollow_ResumeBackward(void)
 {
     g_lf.direction     = DIR_BACKWARD;
@@ -536,30 +439,15 @@ void LineFollow_ResumeBackward(void)
     g_lf.pid.correction = 0;
     g_lf.is_active      = 1;
     reset_all();
-#if DEBUG_ENABLE
-    printf("[LF] → Resume BACKWARD (active=%s base=%d)\r\n",
-           g_lf.active_sensor == ACTIVE_FRONT ? "FRONT" : "REAR",
-           g_lf.base_speed);
-#endif
 }
 
-/*=================================================================
- * 传感器切换 — 核心功能
- *
- * ||豆子箱识别完成后调用:
- *   前传感器 → 后传感器 (或反过来)
- *   重置 PID 状态 + 标记检测状态机
- *=================================================================*/
 void LineFollow_SwapSensors(void)
 {
     g_lf.active_sensor = (g_lf.active_sensor == ACTIVE_FRONT)
         ? ACTIVE_REAR : ACTIVE_FRONT;
-
-    /* 重置 PID 和检测状态 */
     g_lf.pid.last_error = 0.0f;
     g_lf.pid.correction = 0;
     reset_all();
-
 #if DEBUG_ENABLE
     printf("[LF] ★ SWAPPED: active=%s ★\r\n",
            g_lf.active_sensor == ACTIVE_FRONT ? "FRONT" : "REAR");
@@ -573,20 +461,11 @@ void LineFollow_SetActiveSensor(ActiveSensor_t sensor)
         g_lf.pid.last_error = 0.0f;
         g_lf.pid.correction = 0;
         reset_all();
-#if DEBUG_ENABLE
-        printf("[LF] Active sensor → %s\r\n",
-               sensor == ACTIVE_FRONT ? "FRONT" : "REAR");
-#endif
     }
 }
 
 /*=================================================================
- * 平移模式下反光脉冲轮询
- *
- * 用于小断点平移: 车身横向移动, 传感器逐个扫过反光条
- * 状态机: IDLE → RISING → FALLING → IDLE (脉冲完成)
- *
- * 使用活跃传感器 (平移时仍用 SwapSensors 后的传感器)
+ * 平移模式下反光脉冲轮询 (小断点用)
  *=================================================================*/
 static uint8_t  g_refl_pstate = 0;
 static uint32_t g_refl_pulse_cnt = 0;
@@ -600,29 +479,18 @@ void LineFollow_ResetPulseCount(void)
 uint8_t LineFollow_PollReflPulse(void)
 {
     Sensor_Update();
-    uint8_t rf = active_is_reflective();
+    uint8_t rf = active_sensor_ptr()->refl_count;
 
     switch (g_refl_pstate) {
-    case 0: /* IDLE — 等反光 */
-        if (rf) {
-            g_refl_pstate = 1;  /* → RISING */
-        }
+    case 0: /* IDLE */
+        if (rf >= RF_ENTER_THRESHOLD) { g_refl_pstate = 1; }
         break;
-
-    case 1: /* RISING — 等离开反光 */
-        if (!rf) {
-            g_refl_pstate = 2;  /* → FALLING */
-        }
+    case 1: /* RISING */
+        if (rf < RF_ENTER_THRESHOLD)  { g_refl_pstate = 2; }
         break;
-
     case 2: /* FALLING — 脉冲完成 */
         g_refl_pstate = 0;
         g_refl_pulse_cnt++;
-#if DEBUG_ENABLE
-        printf("[LF] Refl pulse #%lu (active=%s)\r\n",
-               (unsigned long)g_refl_pulse_cnt,
-               g_lf.active_sensor == ACTIVE_FRONT ? "F" : "R");
-#endif
         return 1;
     }
     return 0;
@@ -631,18 +499,10 @@ uint8_t LineFollow_PollReflPulse(void)
 /*=================================================================
  * 辅助
  *=================================================================*/
-float    LineFollow_GetError(void)       { return g_lf.pid.last_error; }
-int16_t  LineFollow_GetCorrection(void)  { return g_lf.pid.correction; }
-
-uint8_t LineFollow_IsMovingBackward(void)
-{
-    return (g_lf.direction == DIR_BACKWARD) ? 1 : 0;
-}
-
-ActiveSensor_t LineFollow_GetActiveSensor(void)
-{
-    return g_lf.active_sensor;
-}
+float    LineFollow_GetError(void)           { return g_lf.pid.last_error; }
+int16_t  LineFollow_GetCorrection(void)      { return g_lf.pid.correction; }
+uint8_t  LineFollow_IsMovingBackward(void)   { return (g_lf.direction == DIR_BACKWARD) ? 1 : 0; }
+ActiveSensor_t LineFollow_GetActiveSensor(void) { return g_lf.active_sensor; }
 
 const char* LineFollow_FeatureName(RoadFeature_t f)
 {

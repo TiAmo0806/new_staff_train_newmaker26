@@ -19,6 +19,8 @@
 #include "state_machine.h"
 #include "communication.h"
 #include "main.h"
+#include <stdio.h>
+#include <string.h>
 
 /*=================================================================
  * 全局状态
