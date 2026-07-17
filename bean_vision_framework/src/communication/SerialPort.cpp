@@ -257,14 +257,36 @@ bool SerialPort::waitForAck(uint8_t expected_cmd, uint8_t expected_seq) {
         }
         if (!packet.empty()) {
             const ParsedPacket parsed = protocolInstance().parsePacket(packet);
-            if (parsed.valid &&
-                parsed.cmd == static_cast<uint8_t>(ProtocolCommand::Ack) &&
-                parsed.payload.size() >= 2 &&
-                parsed.payload[0] == expected_cmd &&
-                parsed.payload[1] == expected_seq) {
-                std::cout << "[ACK] received for " << Protocol::commandName(expected_cmd)
-                          << " seq=" << static_cast<int>(expected_seq) << "\n";
-                return true;
+            if (!parsed.valid) {
+                std::cout << "[WARN] invalid packet while waiting ACK expected_cmd="
+                          << Protocol::commandName(expected_cmd)
+                          << " expected_seq=" << static_cast<int>(expected_seq)
+                          << " reason=" << parsed.reason << "\n";
+            } else if (parsed.cmd == static_cast<uint8_t>(ProtocolCommand::Ack)) {
+                if (parsed.payload.size() >= 2 &&
+                    parsed.payload[0] == expected_cmd &&
+                    parsed.payload[1] == expected_seq) {
+                    std::cout << "[ACK] received for " << Protocol::commandName(expected_cmd)
+                              << " seq=" << static_cast<int>(expected_seq) << "\n";
+                    return true;
+                }
+
+                const int acked_cmd =
+                    parsed.payload.size() >= 1 ? static_cast<int>(parsed.payload[0]) : -1;
+                const int acked_seq =
+                    parsed.payload.size() >= 2 ? static_cast<int>(parsed.payload[1]) : -1;
+                std::cout << "[WARN] mismatched ACK expected_cmd="
+                          << Protocol::commandName(expected_cmd)
+                          << " expected_seq=" << static_cast<int>(expected_seq)
+                          << " acked_cmd="
+                          << (acked_cmd >= 0 ? Protocol::commandName(static_cast<uint8_t>(acked_cmd)) : "MISSING")
+                          << " acked_seq=" << acked_seq << "\n";
+            } else {
+                std::cout << "[WARN] discard packet while waiting ACK expected_cmd="
+                          << Protocol::commandName(expected_cmd)
+                          << " expected_seq=" << static_cast<int>(expected_seq)
+                          << " received_cmd=" << Protocol::commandName(parsed.cmd)
+                          << " received_seq=" << static_cast<int>(parsed.seq) << "\n";
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
