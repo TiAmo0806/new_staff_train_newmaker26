@@ -143,6 +143,41 @@ std::vector<int> parseRectValues(const std::string& value) {
 }
 
 /**
+ * @brief 校验多帧扫描配置是否合法。
+ * @param scan 多帧扫描配置。
+ * @throws std::invalid_argument 当 scan 参数越界或互相冲突时抛出。
+ */
+void validateScanConfig(const ScanConfig& scan) {
+    if (scan.frames_per_scan <= 0) {
+        throw std::invalid_argument(
+            "[CONFIG ERROR] scan.frames_per_scan must be > 0, actual=" +
+            std::to_string(scan.frames_per_scan));
+    }
+    if (scan.min_vote_count < 1 || scan.min_vote_count > scan.frames_per_scan) {
+        throw std::invalid_argument(
+            "[CONFIG ERROR] scan.min_vote_count must be in [1, frames_per_scan], actual=" +
+            std::to_string(scan.min_vote_count) +
+            ", frames_per_scan=" + std::to_string(scan.frames_per_scan));
+    }
+    if (scan.min_avg_confidence < 0.0f || scan.min_avg_confidence > 1.0f) {
+        std::ostringstream oss;
+        oss << "[CONFIG ERROR] scan.min_avg_confidence must be in [0.0, 1.0], actual="
+            << scan.min_avg_confidence;
+        throw std::invalid_argument(oss.str());
+    }
+    if (scan.max_retry <= 0) {
+        throw std::invalid_argument(
+            "[CONFIG ERROR] scan.max_retry must be > 0, actual=" +
+            std::to_string(scan.max_retry));
+    }
+    if (scan.stable_delay_ms < 0) {
+        throw std::invalid_argument(
+            "[CONFIG ERROR] scan.stable_delay_ms must be >= 0, actual=" +
+            std::to_string(scan.stable_delay_ms));
+    }
+}
+
+/**
  * @brief 加载类别名称和别名映射。
  * @param path classes.yaml 路径。
  * @param detector 输入输出参数，会写入 names 和 aliases。
@@ -537,5 +572,6 @@ AppConfig AppConfig::load(const std::string& path) {
     config.serial.print_rx_hex = config.debug.print_rx_hex;
     config.serial.print_tx_hex = config.debug.print_tx_hex || config.debug.print_packet_hex;
     config.serial.print_parsed_packet = config.debug.print_parsed_packet;
+    validateScanConfig(config.scan);
     return config;
 }
