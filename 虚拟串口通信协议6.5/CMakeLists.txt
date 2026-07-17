@@ -19,21 +19,23 @@ include_directories(${OpenCV_INCLUDE_DIRS})
 
 # 通用源文件
 set(COMMON_SRC
-  src/CRC16.cpp
-  src/ByteConverter.cpp
+  Communication/CRC16.cpp
+  Communication/ByteConverter.cpp
   src/BeanProtocol.cpp
   src/SerialPort.cpp
 )
 
 # ========== Vision Node ==========
 add_executable(VisionNode
-  src/VisionNode.cpp
-  src/CameraDriver.cpp
+ Communication/VisionNode.cpp
+  CameraDriver/CameraDriver.cpp
   ${COMMON_SRC}
 )
 
 target_include_directories(VisionNode PRIVATE
   src
+  Communication
+  CameraDriver
   ${MVSDK_PATH}/include
   ${ONNX_PATH}/include
 )
@@ -55,7 +57,7 @@ add_executable(ControlNode
   ${COMMON_SRC}
 )
 
-target_include_directories(ControlNode PRIVATE src)
+target_include_directories(ControlNode PRIVATE src Communication)
 
 target_link_libraries(ControlNode
   ${OpenCV_LIBS}
