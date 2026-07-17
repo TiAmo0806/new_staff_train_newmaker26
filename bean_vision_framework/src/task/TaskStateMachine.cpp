@@ -216,6 +216,15 @@ void printTaskPreview(const TaskResult& result) {
     }
 }
 
+bool finalTaskReady(const TaskResult& result) {
+    return result.success && result.tasks.size() == 3;
+}
+
+void logIncompleteFinalTasks(const TaskResult& result) {
+    std::cout << "[ERROR] incomplete final tasks count=" << result.tasks.size()
+              << " expected=3, skip FINAL_TASK send\n";
+}
+
 }  // namespace
 
 /**
@@ -270,6 +279,11 @@ void TaskStateMachine::process(const VisionResult& current,
             break;
 
         case TaskState::SEND_FINAL_TASK:
+            if (!finalTaskReady(taskResult_)) {
+                logIncompleteFinalTasks(taskResult_);
+                setState(TaskState::WAIT_DIGIT_COMMAND);
+                break;
+            }
             packet_ = protocol.makeTaskPacket(taskResult_);
             if (!serial.write(packet_)) {
                 std::cout << "[ERROR] failed to send FINAL_TASK\n";
@@ -479,6 +493,11 @@ bool TaskStateMachine::handleArriveDigit(const std::string& image_path,
         setState(TaskState::WAIT_DIGIT_COMMAND);
         return true;
     }
+    if (!finalTaskReady(preview_task)) {
+        logIncompleteFinalTasks(preview_task);
+        setState(TaskState::WAIT_DIGIT_COMMAND);
+        return true;
+    }
 
     taskResult_ = preview_task;
     setState(TaskState::SEND_FINAL_TASK);
@@ -552,6 +571,11 @@ bool TaskStateMachine::acceptDigitResult(const VisionResult& result,
     taskResult_ = taskGenerator.generate(memory_.mergedResult());
     if (!taskResult_.success) {
         std::cout << "[WARN] final task generation failed: " << taskResult_.reason << "\n";
+        setState(TaskState::WAIT_DIGIT_COMMAND);
+        return true;
+    }
+    if (!finalTaskReady(taskResult_)) {
+        logIncompleteFinalTasks(taskResult_);
         setState(TaskState::WAIT_DIGIT_COMMAND);
         return true;
     }
