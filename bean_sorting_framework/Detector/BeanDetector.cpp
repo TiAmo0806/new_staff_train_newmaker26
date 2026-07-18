@@ -4,11 +4,12 @@
 #include <cmath>
 
 // ===================================================================
-//  DetectorPreprocessor
+//  图像输入预处理
 // ===================================================================
-
+//把输入图像大小改成模型要求输入格式
 cv::Mat DetectorPreprocessor::run(const cv::Mat& src) {
     int tw = inputW_, th = inputH_;
+    //scale_缩放比例；padX_/padY_：填充偏移，保持原有比例缩放后，不符合要求边边进行填充
     scale_ = std::min((float)tw / src.cols, (float)th / src.rows);
     int nw = (int)(src.cols * scale_), nh = (int)(src.rows * scale_);
     cv::Mat resized;
@@ -16,6 +17,7 @@ cv::Mat DetectorPreprocessor::run(const cv::Mat& src) {
     padX_ = (float)(tw - nw) / 2.0f;
     padY_ = (float)(th - nh) / 2.0f;
     cv::Mat lb;
+    //copyMakeBorder填充灰边，lb输出图像，上下左右边填充，填充颜色
     cv::copyMakeBorder(resized, lb,
                        (int)padY_, (int)(th - nh - padY_),
                        (int)padX_, (int)(tw - nw - padX_),
@@ -23,90 +25,100 @@ cv::Mat DetectorPreprocessor::run(const cv::Mat& src) {
     return cv::dnn::blobFromImage(lb, 1.0 / 255.0, cv::Size(tw, th),
                                   cv::Scalar(), true, false);
 }
-
+//1/255坐标归一化，预处理尺寸，上面先变成需要的形状比例，下面再缩放需要的大小
 // ===================================================================
-//  DetectorPostprocessor
+//  模型处理
 // ===================================================================
 
 static float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
-
+//激活函数，用于将任意实数映射到 (0, 1) 区间，用来映射坐标
 std::vector<DetectorPostprocessor::Detection>
 DetectorPostprocessor::decode(const float* dd, int D, int N,
                               float invScale, float padX, float padY,
                               int imgW, int imgH) {
     std::vector<Detection> rs;
-    int NC = N - 4;
+    int NC = N - 4;//计算类别数量；总维度(N) = 4 (bbox) + 类别数量(NC)类别数量 = N - 4
+    //计算网格参数，对应yolo对大中小物体的三个检测尺度
 
-    int gw0 = inputW_ / 8,  gh0 = inputH_ / 8;
-    int gw1 = inputW_ / 16, gh1 = inputH_ / 16;
-    int gw2 = inputW_ / 32, gh2 = inputH_ / 32;
+    int gw0 = inputW_ / 8,  gh0 = inputH_ / 8;//感受视野80x80小物体
+    int gw1 = inputW_ / 16, gh1 = inputH_ / 16;//40x40中
+    int gw2 = inputW_ / 32, gh2 = inputH_ / 32;//20x20大
     int cnt0 = gw0 * gh0, cnt1 = gw1 * gh1, cnt2 = gw2 * gh2;
-    int ST[3] = {8, 16, 32};
-    int GW[3] = {gw0, gw1, gw2};
-    int OFF[4] = {0, cnt0, cnt0 + cnt1, cnt0 + cnt1 + cnt2};
-
+    int ST[3] = {8, 16, 32};//网格缩放因子，坐标映射回原图尺寸
+    int GW[3] = {gw0, gw1, gw2};//存储网格尺寸
+    int OFF[4] = {0, cnt0, cnt0 + cnt1, cnt0 + cnt1 + cnt2};//偏移量数组，定位不同尺度输出在数组中的位置
+    //存储容器，在进行nms之前存储所有框
     float thr = confThr_;
-    std::vector<float>    sc;
-    std::vector<int>      ci;
-    std::vector<cv::Rect> bx;
+    std::vector<float>    sc;//置信度
+    std::vector<int>      ci;//类别索引
+    std::vector<cv::Rect> bx;//边界框
+    //=============候选框解析======================
 
-    for (int x = 0; x < D; ++x) {
+    for (int x = 0; x < D; ++x) {//遍历所有框
+        //找置信度最大
         float bs = 0.0f; int bc = -1;
         for (int c = 0; c < NC; ++c) {
             float s = sigmoid(dd[(4 + c) * D + x]);
             if (s > bs) { bs = s; bc = c; }
         }
         if (bs < thr) continue;
-
+     //提取边界框坐标（可删，目前通信不包含此部分）
         float cx = dd[0 * D + x];
         float cy = dd[1 * D + x];
         float w  = dd[2 * D + x];
         float h_ = dd[3 * D + x];
-
+     //从填充图像坐标 → 原始图像坐标 左上xy,右下xy
         float x1 = (cx - w  / 2.0f - padX) * invScale;
         float y1 = (cy - h_ / 2.0f - padY) * invScale;
         float x2 = (cx + w  / 2.0f - padX) * invScale;
         float y2 = (cy + h_ / 2.0f - padY) * invScale;
-
+     //裁剪图像边界
         int L = (int)(x1 + 0.5f), T = (int)(y1 + 0.5f);
         int R = (int)(x2 + 0.5f), B = (int)(y2 + 0.5f);
         if (L < 0) L = 0; if (T < 0) T = 0;
         if (R > imgW) R = imgW; if (B > imgH) B = imgH;
         int W = R - L, H = B - T;
-        if (W < 5 || H < 5) continue;
+        if (W < 5 || H < 5) continue;//太小丢弃
 
-        sc.push_back(bs); ci.push_back(bc);
+        sc.push_back(bs);
+         ci.push_back(bc);
         bx.push_back(cv::Rect(L, T, W, H));
     }
 
     if (bx.empty()) return rs;
-
+//==================NMS开始去重叠===============================
     std::vector<int> ndx;
     std::vector<std::vector<int> > cls_idx(NC);
     for (int i = 0; i < (int)sc.size(); ++i) {
         int c = ci[i]; if (c >= 0 && c < NC) cls_idx[c].push_back(i);
-    }
+    }//按类别分组
+    //分别对类执行nms,避免不同类因靠得紧被删框
     for (int c = 0; c < NC; ++c) {
         if (cls_idx[c].empty()) continue;
         std::vector<cv::Rect> cbx; std::vector<float> csc;
-        for (int idx : cls_idx[c]) { cbx.push_back(bx[idx]); csc.push_back(sc[idx]); }
+        for (int idx : cls_idx[c]) { cbx.push_back(bx[idx]); 
+            csc.push_back(sc[idx]);
+         }
+         //执行nms
         std::vector<int> cndx;
-        cv::dnn::NMSBoxes(cbx, csc, thr, nmsThr_, cndx);
+        cv::dnn::NMSBoxes(cbx, csc, thr, nmsThr_, cndx);//NMSBoxes框列表， nmsThr_删除力度，cndx nms结果索引
         for (int k : cndx) ndx.push_back(cls_idx[c][k]);
     }
+    //如果所有框都没通过nms筛选，保留置信度最高的一个
     if (ndx.empty()) {
         int hi = 0;
         for (int i = 1; i < (int)sc.size(); ++i) if (sc[i] > sc[hi]) hi = i;
         ndx.push_back(hi);
     }
+    //创建nms检测结果
     for (int i : ndx) {
         Detection r; int id = ci[i];
-        if (id < 0 || id >= NC) id = NC - 1;
-        r.bean_type  = static_cast<bean_sorting::BeanType>(id);
-        r.box        = bx[i];
+        if (id < 0 || id >= NC) id = NC - 1;//安全保护
+        r.bean_type  = static_cast<bean_sorting::BeanType>(id);//类别
+        r.box        = bx[i];//边界框
         r.center     = cv::Point2f((float)bx[i].x + (float)bx[i].width  / 2.0f,
-                                   (float)bx[i].y + (float)bx[i].height / 2.0f);
-        r.confidence = sc[i];
+                                   (float)bx[i].y + (float)bx[i].height / 2.0f);//中心点
+        r.confidence = sc[i];//置信度
         rs.push_back(r);
     }
     std::sort(rs.begin(), rs.end());
@@ -114,9 +126,9 @@ DetectorPostprocessor::decode(const float* dd, int D, int N,
 }
 
 // ===================================================================
-//  DetectorVisualizer
+//  画框可视化部分
 // ===================================================================
-
+//只读类名转换
 static const char* kClassName(int id) {
     switch (id) {
         case 0: return "soybean"; case 1: return "mung";

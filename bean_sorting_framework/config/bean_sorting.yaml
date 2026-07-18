@@ -7,8 +7,8 @@
 
   model:
     path: "best5.onnx"
-    conf_threshold: 0.7
-    nms_threshold: 0.45
+    conf_threshold: 0.6
+    nms_threshold: 0.05
     input_width: 640
     input_height: 640
 

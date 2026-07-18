@@ -17,8 +17,8 @@
 using namespace bean_sorting;
 
 static std::atomic<bool> g_running(true);
-void sigint_handler(int) { g_running = false; }
-
+void sigint_handler(int) { g_running = false; }// Ctrl+C处理
+//豆子类型映射，规定豆子类别放在哪个箱子
 uint8_t map_bean_to_box(BeanType type) {
     switch (type) {
         case BeanType::SOYBEAN:     return 1;
@@ -27,7 +27,8 @@ uint8_t map_bean_to_box(BeanType type) {
         default:                    return 0;
     }
 }
-
+//枚举转字符串，返回类型为指针  模型标签名指向我定义的名字
+//static限制函数只在当前文件使用
 static const char* type_label(BeanType t) {
     switch (t) {
         case BeanType::SOYBEAN:     return "SOYBEAN";
@@ -43,13 +44,13 @@ static const char* type_label(BeanType t) {
         default:                    return "?";
     }
 }
-
+//状态机设置，对标电控
 enum class State { IDLE, BEAN_SENT, COLLECT, BATCH_SENT };
 
 int main(int argc, char* argv[]) {
     std::signal(SIGINT,  sigint_handler);
     std::signal(SIGTERM, sigint_handler);
-
+//调用串口
     std::string serial_port = "/dev/ttyACM*";
     bool show_tx   = true;
     bool watchdog  = false;
@@ -70,8 +71,8 @@ int main(int argc, char* argv[]) {
     }
 
     BeanDetector detector;
-    detector.setConfThreshold(0.6f);
-    detector.setNmsThreshold(0.01);
+    detector.setConfThreshold(0.53f);
+    detector.setNmsThreshold(0.5);
     if (!detector.loadModel("models/best_opset11.onnx")) {
         std::cerr << "[Main] 模型未加载, 仅通信测试" << std::endl;
     }
@@ -80,20 +81,20 @@ int main(int argc, char* argv[]) {
 
     cv::Mat image;
 
-    static constexpr int kDigitFirst = 3;
-    static constexpr int kDigitCount = 5;
-    static constexpr int kMinCollect = 4;
-    BeanDetector::Detection digit_buf[kDigitCount];
-    int digit_ok[kDigitCount] = {0,0,0,0,0};
+    static constexpr int kDigitFirst = 3;//定义数字标签从3开始
+    static constexpr int kDigitCount = 5;//五个数字标签
+    static constexpr int kMinCollect = 4;//最少收集四个数字批量发送
+    BeanDetector::Detection digit_buf[kDigitCount];//存储推理结果
+    int digit_ok[kDigitCount] = {0,0,0,0,0};//预留位置看五个数是否收齐
 
     State state             = State::IDLE;
-    int   last_bean_class   = -1;
-    auto  t_last_log        = std::chrono::steady_clock::now();
+    int   last_bean_class   = -1;//上次识别豆子类型-1无
+    auto  t_last_log        = std::chrono::steady_clock::now();//日志计时器
     bool  collect_started   = false;
 
     // 单向通信延迟: 发完帧后等N帧再切状态, 给电控处理时间
-    static constexpr int kSendDelay = 15;   // ~0.5秒 @33ms/帧
-    int send_cooldown             = 0;
+    static constexpr int kSendDelay = 15;   // 0.5秒 15帧
+    int send_cooldown             = 0;//发送冷却为0,一直发
 
     std::cout << "[Main] 主循环启动 (单向通信, 无ACK)" << std::endl;
 
@@ -101,7 +102,7 @@ int main(int argc, char* argv[]) {
 #ifdef HAS_MV_CAMERA
         if (!camera.grab(image) || image.empty()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            continue;
+            continue;//等待下一帧
         }
 #else
         image = cv::Mat::zeros(480, 640, CV_8UC3);
@@ -109,26 +110,26 @@ int main(int argc, char* argv[]) {
                     cv::Point(50, 240), cv::FONT_HERSHEY_SIMPLEX,
                     1.0, cv::Scalar(0, 255, 0), 2);
 #endif
-
+//==============模型检测部分======================
         auto results = detector.isLoaded() ? detector.detect(image)
                                            : std::vector<BeanDetector::Detection>{};
         if (detector.isLoaded()) detector.drawResults(image, results);
-
+//对识别目标结果进行分类
         std::vector<BeanDetector::Detection> beans, numbers;
         for (const auto& r : results) {
             int cls = static_cast<int>(r.bean_type);
-            if (cls >= 0 && cls <= 2) beans.push_back(r);
+            if (cls >= 0 && cls <= 2) beans.push_back(r);//豆子
             else if (cls >= kDigitFirst && cls < kDigitFirst + kDigitCount)
-                numbers.push_back(r);
+                numbers.push_back(r);//数字
         }
 
         // 冷却递减
-        if (send_cooldown > 0) --send_cooldown;
+        if (send_cooldown > 0) --send_cooldown;//每帧send_cooldown-1直到为零开始下一论发送
 
-        // ---- IDLE: 检测豆子, 发送Vision帧 ----
+        // ---- IDLE状态检测豆子, 发送Vision帧 ----
         if (state == State::IDLE) {
             if (!beans.empty()) {
-                int best = 0;
+                int best = 0;//取置信度最高结果
                 for (size_t i = 1; i < beans.size(); ++i)
                     if (beans[i].confidence > beans[best].confidence) best = (int)i;
 
@@ -137,6 +138,7 @@ int main(int argc, char* argv[]) {
                     for (int i = 0; i < kDigitCount; ++i) digit_ok[i] = 0;
                     last_bean_class = cur_class;
                 }
+                //发送vision帧到单片机
 
                 auto v = detector.toVisionData(beans[best],
                     map_bean_to_box(beans[best].bean_type));
@@ -236,14 +238,13 @@ int main(int argc, char* argv[]) {
                         if (bt == BeanType::DATA_4 || bt == BeanType::DATA_5)
                             bt = BeanType::ERROR;
                         e.bean_type  = bt;
-                        e.target_box = (uint8_t)(4 + i);   // 箱4/5/6/7
+                        e.target_box = (uint8_t)(4 + i);   // 目标箱号4/5/6/7
                         e.detected   = true;
                         batch.push_back(e);
                         std::cout << "[TX]   箱" << (int)e.target_box
                                   << " <- " << type_label(static_cast<BeanType>(cls))
                                   << " x=" << (int)items[i].x << std::endl;
                     }
-
                     if (miss_slot >= 0) {
                         bean_sorting::BatchEntry e;
                         BeanType bt = static_cast<BeanType>(miss_cls);
