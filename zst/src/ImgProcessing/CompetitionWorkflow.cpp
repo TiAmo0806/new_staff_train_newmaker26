@@ -114,10 +114,6 @@ FieldStateCollector CompetitionWorkflow::makeCollector() const
     FieldStateCollectorConfig collectorConfig;
     collectorConfig.voteFramesPerAngle = std::max(1, config_.voteFramesPerStage);   // 至少 1 帧
     collectorConfig.minHitsPerAngle = std::max(1, config_.minHitsPerStage);         // 至少 1 次
-    collectorConfig.minNewDigitsPerCommit =
-        std::clamp(config_.digitsPerView, 1, 5);              // A/B共用：每个角度整批保存数字的门槛
-    collectorConfig.inferPlace5FromFirstFour =
-        config_.inferPlace5FromFirstFour;                     // A/B共用：固定看place1~4时推断place5
     collectorConfig.minNewBeansPerCommit =
         config_.mode == TeamMode::TeamA ? 3 : 1;              // A组必须3个齐全；B组中心豆子逐个确认
     collectorConfig.maxNewBeansPerCommit =
@@ -233,7 +229,7 @@ bool CompetitionWorkflow::loadProgress()
         else if (savedStage == "waiting_digits")
         {
             teamAStage_ = TeamAStage::WaitingDigits;
-            stageValid = collector_.beanReady();
+            stageValid = collector_.beanReady() && collector_.boxCount() == 0;
         }
         else if (savedStage == "finished")
         {
@@ -251,7 +247,7 @@ bool CompetitionWorkflow::loadProgress()
         else if (savedStage == "waiting_digits")
         {
             teamBStage_ = TeamBStage::WaitingDigits;
-            stageValid = collector_.beanCount() >= 1;
+            stageValid = collector_.beanCount() >= 1 && collector_.boxCount() == 0;
         }
         else if (savedStage == "waiting_remaining_beans")
         {

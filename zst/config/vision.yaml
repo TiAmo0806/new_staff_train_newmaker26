@@ -31,8 +31,7 @@ workflow:
   vote_frames_per_stage: 20            # 每个阶段累计多少帧后投票
   min_hits_per_stage: 6                # 目标至少命中多少帧才算稳定
                                         # A组须三种豆子都达标才整批按平均X排序保存；B组中心豆子逐个保存
-  digits_per_view: 4                   # A/B共用：每角度先凑齐4个稳定新数字，再按平均X从左到右整批保存
-  infer_place5_from_first_four: true   # 相机固定只看place1~4；排序保存4个后，用15减去数字总和推断place5
+                                        # 数字固定识别place1~4，再用15减去前四位数字之和推断place5
   team_b_center_width_ratio: 0.40      # 仅B组：只接受画面横向中间40%的豆子，A组不受影响
   clear_progress_on_start: true        # 每次启动自动删除上场断点；相机0/1开关不会清理当前内存
   resume_progress: true                # 仍保存本场断点；只有把上一项临时改false时才允许启动恢复
@@ -44,7 +43,6 @@ runtime:
   # 没接电控进行日常调试时，保持 serial.simulated: true，只打印发送帧而不访问硬件。
   mode: "debug"
   show_window: true
-  save_video: false
   log_dir: "logs"
   terminal_line_limit: 80
 

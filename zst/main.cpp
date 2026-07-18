@@ -118,9 +118,7 @@ int main(int argc, char **argv)
     std::cout << "[Main] 当前队伍: " << teamModeToString(config.workflow.mode)
               << "，投票帧数=" << config.workflow.voteFramesPerStage
               << "，最少命中=" << config.workflow.minHitsPerStage
-              << "，每角度数字数=" << config.workflow.digitsPerView
-              << "，place5推断="
-              << (config.workflow.inferPlace5FromFirstFour ? "开启" : "关闭")
+              << "，数字识别=前四位稳定识别+place5推断"
               << "，B组中心区域宽度="
               << (config.workflow.teamBCenterWidthRatio * 100.0f) << "%" << std::endl;
     std::cout << "[Main] 串口模式: " << (config.serial.simulated ? "模拟发送" : "真实串口")

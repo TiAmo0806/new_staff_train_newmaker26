@@ -18,17 +18,6 @@ struct FieldStateCollectorConfig
     // 例如 20 帧里至少出现 10 帧，才会被加入本角度结果。
     int minHitsPerAngle = 10;        // 当前角度内最少出现次数阈值
 
-    // 数字箱不能按照“第一次识别到的先后顺序”零散写入数组。
-    // 每个角度必须至少凑齐这么多个稳定、未保存且互不重复的新数字，才允许把该角度
-    // 的全部稳定数字按平均X坐标从左到右整批写入。设置为4表示第一角度必须先凑齐4个；
-    // 已保存4个、总容量只剩1个时，会自动把本轮要求降为1。
-    int minNewDigitsPerCommit = 4;
-
-    // true：当前相机画面固定对应物理place1~place4，place5完全不可见。
-    // 第一轮恰好得到4个稳定不同数字后，按平均X从左到右写入place1~4，
-    // 再利用数字1~5总和为15推断place5，不需要切换第二角度。
-    bool inferPlace5FromFirstFour = true;
-
     // 豆子一次提交前至少需要多少个稳定、未保存的新类别。
     // A组设为3：必须黄豆、绿豆、白芸豆全部稳定出现后，才按平均X整批写入；
     // 少任何一个都不允许部分保存。B组设为1：中心豆子稳定后立即保存并发送。
@@ -63,8 +52,8 @@ public:
     // 同一帧同一豆子类别最多计票一次，重复框只保留置信度最高的一个。
     AngleCommitResult addBeanFrame(const std::vector<Detection> &detections);
 
-    // 数字箱阶段调用：一个角度累计若干帧后，先检查稳定新数字数量是否达到门槛；
-    // 达标后才依据多帧平均X坐标从左到右整批保存，未达标时本轮一个也不保存。
+    // 数字箱阶段调用：累计若干帧后必须恰好得到4个稳定且互不重复的数字，
+    // 再按多帧平均X从左到右写入place1~4，并用1~5总和15推断place5。
     // 同一数字在同一帧最多计票一次，避免重复框把命中次数和平均X坐标带偏。
     AngleCommitResult addBoxFrame(const std::vector<Detection> &detections);
 
@@ -109,8 +98,7 @@ private:
     // B组只确认中心最高票候选并逐个保存。
     AngleCommitResult commitBeanAngle();
 
-    // 当前数字箱角度累计够 voteFramesPerAngle 后调用。
-    // 只有稳定新数字数量达到minNewDigitsPerCommit（或剩余容量）时，才按X整批追加。
+    // 当前数字箱累计够 voteFramesPerAngle 后调用；固定执行“前四位识别+place5推断”。
     AngleCommitResult commitBoxAngle();
 
     FieldStateCollectorConfig config_;
@@ -139,10 +127,6 @@ private:
     // 记录某种豆子是否已经保存过。
     // 这样多角度重叠识别时，同一种豆子不会重复占位置。
     std::array<bool, 4> seenBeans_{};
-
-    // 记录某个数字是否已经保存过。
-    // 例如数字 1 在上一个角度已经保存，后续再看到 1 就跳过。
-    std::array<bool, 6> seenDigits_{};
 
     // 终端日志去重键：相同的“未凑齐/重复/无候选”状态只提示一次。
     // 当前候选类别、已保存数量或阶段发生变化时，键随之变化，才重新输出提示。

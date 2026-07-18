@@ -53,7 +53,6 @@ void FieldStateCollector::reset()
 
     // 清空“已经见过”的记录。
     seenBeans_ = {};
-    seenDigits_ = {};
 
     // 新比赛/切队时允许所有关键状态重新输出一次。
     // 单纯完成一轮20帧投票不会清空这些键，从而抑制相同失败信息反复刷屏。
@@ -85,13 +84,14 @@ void FieldStateCollector::restoreState(const FieldState &savedState)
 
     // boxPlaces同样只恢复1~5范围内且不重复的数字。
     // 当前业务约定每个数字只出现一次，因此重复值应视为损坏数据并跳过。
+    std::array<bool, 6> restoredDigits{};
     for (int digit : savedState.boxPlaces)
     {
-        if (digit < 1 || digit > 5 || seenDigits_[digit]) continue;
+        if (digit < 1 || digit > 5 || restoredDigits[digit]) continue;
         if (nextBoxIndex_ >= static_cast<int>(state_.boxPlaces.size())) break;
 
         state_.boxPlaces[nextBoxIndex_] = digit;
-        seenDigits_[digit] = true;
+        restoredDigits[digit] = true;
         ++nextBoxIndex_;
     }
 
@@ -198,9 +198,6 @@ AngleCommitResult FieldStateCollector::addBoxFrame(const std::vector<Detection> 
         {
             continue;                                   // 跳过非数字箱检测或无效数字
         }
-
-        // 已经由前一个角度保存过的数字不再参与本角度投票，避免重叠画面影响新数字排序。
-        if (seenDigits_[d.digit]) continue;
 
         const Detection *&best = bestDetectionByDigit[d.digit];
         if (best == nullptr || d.score > best->score)
@@ -409,29 +406,31 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
 AngleCommitResult FieldStateCollector::commitBoxAngle()
 {
     AngleCommitResult result;
-    result.committed = true;                            // 标记本次调用完成了一轮角度核对
+    result.committed = true;                            // 标记本次调用完成了一轮数字核对
+
+    // 当前工作流只保留“识别place1~place4并推断place5”。因此数字阶段必须从空数组开始；
+    // 若断点或外部数据带入半成品，宁可拒绝继续，也不能把它当成普通多角度模式追加。
+    if (nextBoxIndex_ != 0)
+    {
+        std::cerr << "[数字核对] 数字缓存不是空状态，无法执行前四位推断，本轮不保存"
+                  << std::endl;
+        resetBoxAngle();
+        return result;
+    }
 
     // 先筛出当前角度内”出现次数足够多”的数字。
     // 出现次数太少的数字可能是误检，不保存。
     std::vector<CandidateStat> candidates;
     for (int digit = 1; digit <= 5; ++digit)
     {
-        if (!seenDigits_[digit] &&
-            boxStats_[digit].count >= config_.minHitsPerAngle)
+        if (boxStats_[digit].count >= config_.minHitsPerAngle)
         {
-            candidates.push_back(boxStats_[digit]);     // 未保存且命中次数达标，加入候选
+            candidates.push_back(boxStats_[digit]);     // 命中次数达标，加入候选
         }
     }
 
-    // 普通多角度模式下，第一角度通常要求4个新数字；数组只剩1个空位时，
-    // requiredCount会自动降为1。place5推断模式则固定要求第一轮恰好4个。
-    const int totalCapacity = static_cast<int>(state_.boxPlaces.size());
-    const int remainingCapacity = totalCapacity - nextBoxIndex_;
-    const bool inferPlace5ThisRound =
-        config_.inferPlace5FromFirstFour && nextBoxIndex_ == 0 && remainingCapacity == 5;
-    const int requiredCount = inferPlace5ThisRound
-        ? 4
-        : std::min(std::max(1, config_.minNewDigitsPerCommit), remainingCapacity);
+    // 相机画面固定对应物理place1~place4，所以每轮必须恰好得到4个稳定数字。
+    constexpr int requiredCount = 4;
 
     // 当前角度内部按画面从左到右排序。
     // 例如当前角度看到 1-3-4，就按 1、3、4 的顺序处理。
@@ -439,17 +438,15 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
         return a.averageX() < b.averageX();             // 按平均 x 升序 = 从左到右
     });
 
-    // 推断模式必须“恰好4个”：少于4个无法推断，出现5个则与“画面只含place1~4”矛盾，
-    // 很可能混入误检，因此两种情况都整批拒绝。普通模式只要求不少于requiredCount。
-    const bool candidateCountInvalid = inferPlace5ThisRound
-        ? static_cast<int>(candidates.size()) != requiredCount
-        : static_cast<int>(candidates.size()) < requiredCount;
+    // 少于4个无法推断，出现5个则与“画面只含place1~place4”矛盾，
+    // 很可能混入误检，因此两种情况都整批拒绝。
+    const bool candidateCountInvalid =
+        static_cast<int>(candidates.size()) != requiredCount;
 
     // 同一阶段、同一组候选数字的失败状态只输出一次。命中数和平均X不参与去重键，
     // 因此连续多轮“0个候选”不会每20帧刷一行；候选数字变化时才重新提醒。
     std::ostringstream boxStatusKeyBuilder;
-    boxStatusKeyBuilder << nextBoxIndex_ << ':' << requiredCount << ':'
-                        << (inferPlace5ThisRound ? 'I' : 'N') << ':';
+    boxStatusKeyBuilder << "infer:" << requiredCount << ':';
     for (const CandidateStat &candidate : candidates)
         boxStatusKeyBuilder << candidate.id << ',';
     const std::string boxStatusKey = boxStatusKeyBuilder.str();
@@ -459,8 +456,7 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
         if (shouldLogBoxStatus)
         {
             std::cout << "[数字角度核对] 稳定新数字=" << candidates.size()
-                      << "，要求=" << (inferPlace5ThisRound ? "恰好" : "至少")
-                      << requiredCount << "，本轮不保存；候选=";
+                      << "，要求=恰好" << requiredCount << "，本轮不保存；候选=";
             if (candidates.empty())
             {
                 std::cout << "无";
@@ -484,29 +480,25 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
 
     // 数字1~5各出现一次，总和固定为15。推断模式下四个候选已经保证互不重复，
     // 因而15减去四个候选之和就是唯一缺失数字，也就是不可见的place5内容。
-    int inferredPlace5Digit = 0;
-    if (inferPlace5ThisRound)
-    {
-        int detectedDigitSum = 0;
-        for (const CandidateStat &candidate : candidates)
-            detectedDigitSum += candidate.id;
-        inferredPlace5Digit = 15 - detectedDigitSum;
+    int detectedDigitSum = 0;
+    for (const CandidateStat &candidate : candidates)
+        detectedDigitSum += candidate.id;
+    const int inferredPlace5Digit = 15 - detectedDigitSum;
 
-        const bool inferredDigitInvalid =
-            inferredPlace5Digit < 1 || inferredPlace5Digit > 5 ||
-            std::any_of(candidates.begin(), candidates.end(), [&](const CandidateStat &candidate) {
-                return candidate.id == inferredPlace5Digit;
-            });
-        if (inferredDigitInvalid)
-        {
-            // 理论上“4个互不重复且均在1~5”不会进入这里；保留防御检查，避免未来改动
-            // 放宽候选条件后，把0、负数或重复数字写入正式数组。
-            std::cerr << "[数字角度核对] place5推断非法：四个数字总和="
-                      << detectedDigitSum << "，推断值=" << inferredPlace5Digit
-                      << "，本轮不保存" << std::endl;
-            resetBoxAngle();
-            return result;
-        }
+    const bool inferredDigitInvalid =
+        inferredPlace5Digit < 1 || inferredPlace5Digit > 5 ||
+        std::any_of(candidates.begin(), candidates.end(), [&](const CandidateStat &candidate) {
+            return candidate.id == inferredPlace5Digit;
+        });
+    if (inferredDigitInvalid)
+    {
+        // 理论上“4个互不重复且均在1~5”不会进入这里；保留防御检查，避免未来改动
+        // 放宽候选条件后，把0、负数或重复数字写入正式数组。
+        std::cerr << "[数字角度核对] place5推断非法：四个数字总和="
+                  << detectedDigitSum << "，推断值=" << inferredPlace5Digit
+                  << "，本轮不保存" << std::endl;
+        resetBoxAngle();
+        return result;
     }
 
     // 数量达标后再统一输出排序核对信息。这里的顺序就是即将写入boxPlaces的顺序。
@@ -523,12 +515,6 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
 
     for (const auto &candidate : candidates)
     {
-        // 如果这个数字之前已经保存过，说明它是重叠区域重复看到的数字，跳过。
-        if (seenDigits_[candidate.id])
-        {
-            continue;                                   // 已保存过的数字
-        }
-
         // 五个箱子位置已经写满，不再保存。
         if (nextBoxIndex_ >= static_cast<int>(state_.boxPlaces.size()))
         {
@@ -537,22 +523,16 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
 
         // 把当前新数字写入下一个 box_place。
         state_.boxPlaces[nextBoxIndex_] = candidate.id; // 写入数字
-        seenDigits_[candidate.id] = true;               // 标记为已见过
         nextBoxIndex_++;                                // 下一个写入位置
         result.addedCount++;                            // 新增计数 +1
     }
 
-    if (inferPlace5ThisRound)
-    {
-        // 当前相机画面固定从左到右对应place1~place4，所以四个候选排序写完后，
-        // 推断数字只能写到最后一个物理位置place5，不能参与X排序。
-        state_.boxPlaces[nextBoxIndex_] = inferredPlace5Digit;
-        seenDigits_[inferredPlace5Digit] = true;
-        nextBoxIndex_++;
-        result.addedCount++;
-        std::cout << "[数字推断] place5不可见，15-前四个数字之和="
-                  << inferredPlace5Digit << "，已写入place5" << std::endl;
-    }
+    // 四个候选排序写完后，推断数字只能写到最后一个物理位置place5，不能参与X排序。
+    state_.boxPlaces[nextBoxIndex_] = inferredPlace5Digit;
+    nextBoxIndex_++;
+    result.addedCount++;
+    std::cout << "[数字推断] place5不可见，15-前四个数字之和="
+              << inferredPlace5Digit << "，已写入place5" << std::endl;
 
     // 五个位置都写满，箱子区识别完成。
     state_.boxReady = nextBoxIndex_ >= static_cast<int>(state_.boxPlaces.size());
@@ -565,8 +545,6 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
         std::cout << state_.boxPlaces[i];
     }
     std::cout << ']';
-    if (!state_.boxReady)
-        std::cout << "，请切换角度识别剩余数字";
     std::cout << std::endl;
 
     // 一个角度提交完后，清空临时投票，准备下一个角度。

@@ -143,7 +143,6 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
                 }
             }
             if (r["show_window"]) config.showWindow = r["show_window"].as<bool>();
-            if (r["save_video"]) config.saveVideo = r["save_video"].as<bool>();
             if (r["log_dir"]) config.logDir = r["log_dir"].as<std::string>();
             if (r["terminal_line_limit"]) config.terminalLineLimit = r["terminal_line_limit"].as<int>();
         }
@@ -160,12 +159,6 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
                 config.workflow.voteFramesPerStage = w["vote_frames_per_stage"].as<int>();
             if (w["min_hits_per_stage"])
                 config.workflow.minHitsPerStage = w["min_hits_per_stage"].as<int>();
-            if (w["digits_per_view"])
-                config.workflow.digitsPerView =
-                    std::clamp(w["digits_per_view"].as<int>(), 1, 5);
-            if (w["infer_place5_from_first_four"])
-                config.workflow.inferPlace5FromFirstFour =
-                    w["infer_place5_from_first_four"].as<bool>();
             if (w["team_b_center_width_ratio"])
                 config.workflow.teamBCenterWidthRatio =
                     w["team_b_center_width_ratio"].as<float>();
