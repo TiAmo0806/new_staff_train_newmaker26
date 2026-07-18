@@ -1,6 +1,5 @@
 ﻿#include "command/SerialCommandSource.h"
 #include "command/TerminalCommandSource.h"
-#include "communication/ByteConverter.h"
 #include "communication/Protocol.h"
 #include "communication/SerialPort.h"
 #include "core/AppConfig.h"
@@ -83,24 +82,10 @@ void printMainUsage(const char* app) {
 /**
  * @brief 打印终端命令模式的可用命令。
  */
-void printTerminalCommands(const AppConfig& config) {
+void printTerminalCommands() {
     std::cout << "Commands:\n";
-    if (isCameraOrVideoInput(config)) {
-        std::cout << "  arrive_bean\n";
-        std::cout << "  arrive_digit\n";
-        std::cout << "  reset\n";
-        std::cout << "  quit\n";
-        return;
-    }
-
-    if (isImageStyleInput(config)) {
-        std::cout << "  arrive_bean\n";
-        std::cout << "  arrive_digit\n";
-        std::cout << "  reset\n";
-        std::cout << "  quit\n";
-        return;
-    }
-
+    std::cout << "  arrive_bean\n";
+    std::cout << "  arrive_digit\n";
     std::cout << "  reset\n";
     std::cout << "  quit\n";
 }
@@ -159,16 +144,13 @@ void runCommandLoop(CommandSource& commandSource,
                     SerialPort& serial,
                     const AppConfig& config) {
     if (config.command.source == "terminal") {
-        printTerminalCommands(config);
+        printTerminalCommands();
     } else if (config.command.source == "serial") {
         std::cout << "[COMMAND] source=serial, waiting for STM32 commands\n";
         std::cout << "[COMMAND] supported: ARRIVE_BEAN, ARRIVE_DIGIT, RESET, PING\n";
     }
 
-    const bool single_frame_runner_mode = isImageStyleInput(config);
-    const bool camera_command_mode = isCameraOrVideoInput(config);
-    const bool open_input_for_command_mode = single_frame_runner_mode || camera_command_mode;
-    if (open_input_for_command_mode && !input.open()) {
+    if (!input.open()) {
         std::cerr << "Input open failed.\n";
         return;
     }
@@ -182,9 +164,7 @@ void runCommandLoop(CommandSource& commandSource,
         }
     }
 
-    if (open_input_for_command_mode) {
-        input.release();
-    }
+    input.release();
 }
 
 /**

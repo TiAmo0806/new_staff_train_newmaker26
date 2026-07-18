@@ -1,9 +1,6 @@
 #include "task/TaskStateMachine.h"
 
 #include "task/DigitInference.h"
-#include "utils/DebugLogger.h"
-
-#include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
 #include <iostream>
@@ -92,26 +89,6 @@ int digitValue(const PositionResult& position) {
         return 5;
     }
     return 0;
-}
-
-void printDigitSnapshot(const VisionResult& result) {
-    const std::map<int, std::string> place_labels = {
-        {4, "L4"},
-        {5, "L5"},
-        {6, "L6"},
-        {7, "L7"},
-        {8, "L8"},
-    };
-
-    for (const auto& [place_id, label] : place_labels) {
-        const PositionResult& position = digitPositionByPlace(result, place_id);
-        const int digit = digitValue(position);
-        if (digit > 0) {
-            std::cout << "[DIGIT] " << label << " = digit_" << digit << "\n";
-        } else {
-            std::cout << "[DIGIT] " << label << " = unknown\n";
-        }
-    }
 }
 
 void applyInferredDigits(VisionResult& result, const DigitInferenceResult& inference_result) {
@@ -491,47 +468,6 @@ bool TaskStateMachine::acceptBeanResult(const VisionResult& result,
     }
 
     setState(TaskState::WAIT_DIGIT_COMMAND);
-    return true;
-}
-
-bool TaskStateMachine::acceptDigitResult(const VisionResult& result,
-                                         TaskGenerator& taskGenerator,
-                                         Protocol& protocol,
-                                         SerialPort& serial) {
-    memory_.updateDigits(result);
-    if (!memory_.digitsReady()) {
-        std::cout << "[WARN] no valid digit result in L4-L8\n";
-        setState(TaskState::WAIT_DIGIT_COMMAND);
-        return true;
-    }
-
-    setState(TaskState::GENERATE_FINAL_TASK);
-    taskResult_ = taskGenerator.generate(memory_.mergedResult());
-    if (!taskResult_.success) {
-        std::cout << "[WARN] final task generation failed: " << taskResult_.reason << "\n";
-        setState(TaskState::WAIT_DIGIT_COMMAND);
-        return true;
-    }
-    if (!finalTaskReady(taskResult_)) {
-        logIncompleteFinalTasks(taskResult_);
-        setState(TaskState::WAIT_DIGIT_COMMAND);
-        return true;
-    }
-
-    setState(TaskState::SEND_FINAL_TASK);
-    packet_ = protocol.makeTaskPacket(taskResult_);
-    if (!serial.write(packet_)) {
-        std::cout << "[ERROR] failed to send FINAL_TASK\n";
-        setState(TaskState::WAIT_DIGIT_COMMAND);
-        return true;
-    }
-    for (const auto& task : taskResult_.tasks) {
-        std::cout << "[TX FINAL_TASK] P" << static_cast<int>(task.from)
-                  << " -> L" << static_cast<int>(task.to)
-                  << " bean=" << static_cast<int>(task.bean) << "\n";
-    }
-
-    setState(TaskState::DONE);
     return true;
 }
 

@@ -115,11 +115,6 @@ private:
                           Protocol& protocol,
                           SerialPort& serial);
 
-    bool acceptDigitResult(const VisionResult& result,
-                           TaskGenerator& taskGenerator,
-                           Protocol& protocol,
-                           SerialPort& serial);
-
     /**
      * @brief 切换状态并输出状态日志。
      * @param next 下一个状态。
