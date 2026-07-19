@@ -25,9 +25,9 @@
 
 namespace
 {
-// 将当前帧有效检测按框中心X从左到右排列。
+// 将当前帧有效检测按框中心X从右到左排列。
 // 这里只用于debug日志和画面提示，不会改变工作流的多帧投票、正式排序和发送数据。
-std::vector<Detection> leftToRightDetections(const std::vector<Detection> &detections)
+std::vector<Detection> rightToLeftDetections(const std::vector<Detection> &detections)
 {
     std::vector<Detection> sorted;
     for (const Detection &d : detections)
@@ -36,7 +36,7 @@ std::vector<Detection> leftToRightDetections(const std::vector<Detection> &detec
             sorted.push_back(d);
     }
     std::sort(sorted.begin(), sorted.end(), [](const Detection &a, const Detection &b) {
-        return a.box.x + a.box.width / 2 < b.box.x + b.box.width / 2;
+        return a.box.x + a.box.width / 2 > b.box.x + b.box.width / 2;
     });
     return sorted;
 }
@@ -45,7 +45,7 @@ std::vector<Detection> leftToRightDetections(const std::vector<Detection> &detec
 std::string detectionOverlayText(const std::vector<Detection> &sorted)
 {
     std::ostringstream oss;
-    oss << "YOLO L-R:";
+    oss << "YOLO R-L:";
     for (const Detection &d : sorted)
     {
         if (d.kind == TargetKind::DigitBox)
@@ -111,7 +111,7 @@ int main(int argc, char **argv)
     VisionSystem vision(config.vision);                 // 创建视觉系统
 
     // 两队共用识别算法、协议编码和物理串口，只切换上层流程状态机。
-    // TeamA：3个豆子 -> 5个数字 -> 一次发送6字节位置结果。
+    // TeamA：3个豆子完成后发送3字节，再识别数字并发送第二个3字节结果。
     // A组3豆和A/B数字均要求完整目标同帧出现，并以多帧X顺序一致性投票确认。
     // TeamB：中心第1个豆子 -> 全部数字place1~5 -> 中心剩余新豆子；类型顺序不固定。
     CompetitionWorkflow workflow(config.workflow);      // 创建比赛工作流
@@ -130,7 +130,7 @@ int main(int argc, char **argv)
     if (config.runMode == AppRunMode::Debug)
     {
         std::cout << "[CameraControl] 当前为debug调试模式：程序将直接打开相机，"
-                     "不等待并忽略电控camera_state开关命令"
+                     "不等待并忽略电控camera_state开关命令；键盘0=关、1=开"
                   << std::endl;
         if (!config.serial.simulated)
             std::cout << "[CameraControl] 调试模式仍保留真实双向串口通信；"
@@ -154,12 +154,24 @@ int main(int argc, char **argv)
     const std::string windowName = "Logistics Vision";
     if (config.showWindow) cv::namedWindow(windowName, cv::WINDOW_NORMAL); // 创建可缩放窗口
 
-    // 三个位置都会处理按键：正常取图、相机取图失败、以及电控主动关闭相机时。
-    // 返回true表示用户要求退出；R/1/2仍交给工作流处理，不依赖相机是否开启。
+    // 三个位置都会处理按键：正常取图、相机取图失败、以及相机关闭等待时。
+    // debug模式：0关闭相机、1打开相机；A/B切队；R清空本场；Q/ESC退出。
     auto handleKey = [&](int key) {
         if (key == 27 || key == 'q' || key == 'Q') return true; // ESC或Q退出程序
-        if (key == '1') workflow.switchMode(TeamMode::TeamA);   // 切换到队伍A
-        if (key == '2') workflow.switchMode(TeamMode::TeamB);   // 切换到队伍B
+        if (key == 'a' || key == 'A') workflow.switchMode(TeamMode::TeamA);
+        if (key == 'b' || key == 'B') workflow.switchMode(TeamMode::TeamB);
+        if (config.runMode == AppRunMode::Debug && key == '0')
+        {
+            cameraEnabled = false;
+            if (cameraIsOpen) camera.close();
+            cameraIsOpen = false;
+            std::cout << "[CameraControl] debug键盘命令0：相机已关闭" << std::endl;
+        }
+        if (config.runMode == AppRunMode::Debug && key == '1')
+        {
+            cameraEnabled = true; // 下一轮由统一打开/重连分支调用camera.open()
+            std::cout << "[CameraControl] debug键盘命令1：准备打开相机" << std::endl;
+        }
         // 新一场比赛开始前按R：同时清空内存投票和磁盘断点。
         // 正常中途关相机不要按R，否则会主动删除断点并回到第一阶段。
         if (key == 'r' || key == 'R') workflow.reset();
@@ -319,7 +331,7 @@ int main(int argc, char **argv)
         std::vector<Detection> debugSortedDetections;
         if (config.runMode == AppRunMode::Debug)
         {
-            debugSortedDetections = leftToRightDetections(result.detections);
+            debugSortedDetections = rightToLeftDetections(result.detections);
             cv::putText(result.debugImage, detectionOverlayText(debugSortedDetections),
                         cv::Point(20, 75), cv::FONT_HERSHEY_SIMPLEX, 0.65,
                         cv::Scalar(255, 255, 0), 2);
@@ -327,8 +339,8 @@ int main(int argc, char **argv)
 
         // 7. 当前队伍工作流决定"这一帧是否产生阶段消息"。
         // update只处理识别顺序和生成消息，不直接操作串口，因此TeamA/B流程可以独立测试。
-        // 无ACK模式下，结果生成后工作流立即进入下一阶段，并只发送一次。
-        // imageWidth用于B组选择最靠近画面中心的豆子；A组仍按原来的从左到右规则。
+        // 无ACK模式下，每个阶段结果生成后立即推进，并把该阶段消息发送一次。
+        // imageWidth用于B组选择最靠近画面中心的豆子；A组按从右到左规则排序。
         const std::vector<VisionTxPacket> packets =
             workflow.update(result.detections, frame.cols); // 工作流更新
         for (const VisionTxPacket &tx : packets)

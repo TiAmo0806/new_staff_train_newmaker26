@@ -74,7 +74,7 @@ private:
         int count = 0;
 
         // 当前角度中，这个 id 的检测框中心 x 坐标总和。
-        // 用它计算平均 x，实现“当前角度内从左到右排序”。
+        // 用它计算平均 x，实现“当前角度内从右到左排序”。
         float xSum = 0.0f;
 
         float averageX() const
@@ -116,10 +116,10 @@ private:
     // 下标 1~3 分别表示黄豆、绿豆、白芸豆。
     std::array<CandidateStat, 4> beanStats_{};
 
-    // A组豆子完整帧的从左到右排列票；只有同帧3类齐全时才记一票。
+    // A组豆子完整帧的从右到左排列票；只有同帧3类齐全时才记一票。
     std::map<std::array<int, 3>, int> beanOrderVotes_;
 
-    // 数字完整帧的从左到右排列票；只有同帧恰好4个不同数字时才记一票。
+    // 数字完整帧的从右到左排列票；只有同帧恰好4个不同数字时才记一票。
     std::map<std::array<int, 4>, int> boxOrderVotes_;
 
     // 记录某种豆子是否已经保存过。

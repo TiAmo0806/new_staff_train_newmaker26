@@ -18,7 +18,7 @@ struct SerialConfig
 
 struct VisionTxPacket
 {
-    uint8_t command = 0;           // 业务命令：A组0x10，B组0x20/0x21
+    uint8_t command = 0;           // 业务命令：A组0x10/0x11，B组0x20/0x21
     std::vector<uint8_t> data;     // 每种CMD对应的固定长度业务数据
 };
 

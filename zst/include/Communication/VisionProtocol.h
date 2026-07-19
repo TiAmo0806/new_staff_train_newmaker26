@@ -9,17 +9,15 @@
 // 队伍模式只在视觉电脑内部选择状态机，不作为线路字段发送给电控。
 enum class TeamMode : uint8_t
 {
-    TeamA = 1,  // 先识别3个豆子，再识别5个数字，最后发送6字节位置结果
+    TeamA = 1,  // 先发送3字节豆子位置，再发送3字节数字位置
     TeamB = 2   // 中心豆子、数字数组、剩余中心豆子分阶段发送
 };
 
 // 视觉发给电控的业务消息类型。当前使用无ACK双向通信，不发送SEQ。
 enum class VisionMessageType : uint8_t
 {
-    // A组最终结果固定6字节：
-    // [黄豆位置, 绿豆位置, 白芸豆位置, 数字1位置, 数字2位置, 数字3位置]。
-    // 前3字节表示三种豆子从左到右位于第几个位置；后3字节表示对应数字箱的位置。
-    TeamAResult = 0x10,
+    TeamABeanPositions = 0x10,  // A组：[黄豆位置, 绿豆位置, 白芸豆位置]
+    TeamADigitPositions = 0x11, // A组：[数字1位置, 数字2位置, 数字3位置]
     BeanCode = 0x20,       // B组：DATA为1个中心豆子编码
     DigitLayout = 0x21     // B组：DATA为place1~place5上的数字
 };

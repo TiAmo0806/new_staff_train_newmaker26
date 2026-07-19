@@ -6,7 +6,7 @@
 namespace
 {
 // 计算检测框中心点的 x 坐标。
-// 当前角度内需要按”从左到右”保存，所以只需要比较 x。
+// 当前角度内需要按“从右到左”保存，所以只需要比较 x。
 float detectionCenterX(const Detection &d)
 {
     return static_cast<float>(d.box.x) + static_cast<float>(d.box.width) * 0.5f; // 框左边界 + 半宽 = 中心 x
@@ -184,7 +184,7 @@ AngleCommitResult FieldStateCollector::addBeanFrame(const std::vector<Detection>
             };
             std::sort(completeBeans.begin(), completeBeans.end(),
                       [](const Detection *a, const Detection *b) {
-                          return detectionCenterX(*a) < detectionCenterX(*b);
+                          return detectionCenterX(*a) > detectionCenterX(*b);
                       });
             std::array<int, 3> order{};
             for (std::size_t i = 0; i < order.size(); ++i)
@@ -245,7 +245,7 @@ AngleCommitResult FieldStateCollector::addBoxFrame(const std::vector<Detection> 
     {
         std::sort(completeDigits.begin(), completeDigits.end(),
                   [](const Detection *a, const Detection *b) {
-                      return detectionCenterX(*a) < detectionCenterX(*b);
+                      return detectionCenterX(*a) > detectionCenterX(*b);
                   });
         std::array<int, 4> order{};
         for (std::size_t i = 0; i < order.size(); ++i)
@@ -305,7 +305,7 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
         }
 
         std::cout << "[A组豆子顺序核对] 通过，" << bestVotes << '/'
-                  << config_.voteFramesPerAngle << "帧从左到右一致=";
+                  << config_.voteFramesPerAngle << "帧从右到左一致=";
         for (std::size_t i = 0; i < bestOrder.size(); ++i)
         {
             if (i != 0) std::cout << " -> ";
@@ -461,7 +461,7 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
     }
 
     std::cout << "[数字顺序核对] 通过，" << bestVotes << '/'
-              << config_.voteFramesPerAngle << "帧从左到右一致=";
+              << config_.voteFramesPerAngle << "帧从右到左一致=";
     for (size_t i = 0; i < bestOrder.size(); ++i)
     {
         if (i != 0) std::cout << " -> ";
@@ -494,7 +494,7 @@ AngleCommitResult FieldStateCollector::commitBoxAngle()
     // 五个位置都写满，箱子区识别完成。
     state_.boxReady = nextBoxIndex_ >= static_cast<int>(state_.boxPlaces.size());
 
-    // 提交后打印当前正式缓存，现场可以直接核对是否按物理画面从左到右排列。
+    // 提交后打印当前正式缓存，现场可以直接核对是否按物理画面从右到左排列。
     std::cout << "[数字缓存] 已保存=" << nextBoxIndex_ << "/5，当前数组=[";
     for (size_t i = 0; i < state_.boxPlaces.size(); ++i)
     {

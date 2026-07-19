@@ -73,14 +73,15 @@ private:
                                             int imageWidth);
 
     std::vector<uint8_t> digitsData() const;
-    std::vector<uint8_t> teamAResultData() const;
+    std::vector<uint8_t> teamABeanPositionsData() const;
+    std::vector<uint8_t> teamADigitPositionsData() const;
     std::vector<uint8_t> beanCodeData(int beanIndex) const;
 
     uint8_t beanPosition(BeanType bean) const;
     uint8_t digitPosition(int digit) const;
     void logDigitLayout() const;
     void logTeamABeanPositions() const;
-    void logTeamAFinalResult() const;
+    void logTeamADigitPositions() const;
     void logBeanResult(int beanIndex, const char *stage) const;
 
     CompetitionWorkflowConfig config_;

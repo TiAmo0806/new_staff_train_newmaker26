@@ -12,7 +12,7 @@ namespace
 // B组从所有豆子中选择“位于中心区域、距离画面中心最近”的唯一目标。
 // 不预设黄豆/绿豆/白芸豆顺序，中心是什么就返回什么；是否已经识别过由收集器判断。
 // 其他豆子不送进FieldStateCollector，因此不会保存、不会标记为已识别，也不会影响后续阶段。
-// A组不会调用本函数，仍由FieldStateCollector按X坐标从左到右保存全部豆子。
+// A组不会调用本函数，仍由FieldStateCollector按X坐标从右到左保存全部豆子。
 std::vector<Detection> centerBean(const std::vector<Detection> &detections,
                                   int imageWidth,
                                   float centerWidthRatio)
@@ -167,15 +167,15 @@ bool CompetitionWorkflow::loadProgress()
 
     int ignoredNextSequence = 1;
 
-    // version 1/2是旧A组“先数字后豆子”流程；version 3开始使用
-    // “先豆子后数字，最后一次发送6字节位置结果”。B组的数据结构没有改变。
+    // version 1/2是旧A组“先数字后豆子”流程；version 3是A组最后合并发送6字节；
+    // version 4开始在豆子、数字识别完成后各发送一次3字节结果。B组结构没有改变。
     bool parsed = readExpectedKey(input, "version") && static_cast<bool>(input >> version)
                && readExpectedKey(input, "mode") && static_cast<bool>(input >> savedMode)
                && readExpectedKey(input, "stage") && static_cast<bool>(input >> savedStage);
     if (parsed && version == 2)
         parsed = readExpectedKey(input, "next_sequence")
               && static_cast<bool>(input >> ignoredNextSequence);
-    parsed = parsed && (version == 1 || version == 2 || version == 3)
+    parsed = parsed && (version == 1 || version == 2 || version == 3 || version == 4)
           && readExpectedKey(input, "beans")
           && static_cast<bool>(input >> beanCodes[0] >> beanCodes[1] >> beanCodes[2])
           && readExpectedKey(input, "boxes")
@@ -201,11 +201,11 @@ bool CompetitionWorkflow::loadProgress()
         return false;
     }
 
-    // 旧A组断点中的waiting_digits/waiting_beans含义与新流程正好相反，不能安全复用。
-    // 明确忽略旧断点比把旧缓存误当成新比赛结果更安全；B组旧断点仍可正常恢复。
-    if (config_.mode == TeamMode::TeamA && version < 3)
+    // A组旧断点无法证明豆子位置消息是否已发送；继续恢复可能让电控漏掉第一帧。
+    // 因此A组只恢复version 4，B组旧断点仍可正常恢复。
+    if (config_.mode == TeamMode::TeamA && version < 4)
     {
-        std::cout << "[WorkflowResume] 检测到旧A组断点版本，因识别顺序和发送数据已改变，"
+        std::cout << "[WorkflowResume] 检测到旧A组断点版本，因两阶段发送协议已改变，"
                      "本次从3个豆子阶段重新开始" << std::endl;
         resetMemory();
         return false;
@@ -317,7 +317,7 @@ bool CompetitionWorkflow::saveProgress() const
     }
 
     const FieldState &current = collector_.state();
-    output << "version 3\n";
+    output << "version 4\n";
     output << "mode " << teamModeToString(config_.mode) << "\n";
     output << "stage " << stage << "\n";
     output << "beans "
@@ -464,11 +464,19 @@ bool CompetitionWorkflow::advanceStageAfterSend(VisionMessageType command)
 {
     if (config_.mode == TeamMode::TeamA)
     {
+        if (teamAStage_ == TeamAStage::WaitingBeans &&
+            command == VisionMessageType::TeamABeanPositions)
+        {
+            teamAStage_ = TeamAStage::WaitingDigits;
+            std::cout << "[A组状态] 豆子位置已生成并准备发送，下一步：识别数字位置"
+                      << std::endl;
+            return true;
+        }
         if (teamAStage_ == TeamAStage::WaitingDigits &&
-            command == VisionMessageType::TeamAResult)
+            command == VisionMessageType::TeamADigitPositions)
         {
             teamAStage_ = TeamAStage::Finished;
-            std::cout << "[A组状态] 6字节位置结果已生成并准备发送，A组视觉流程完成"
+            std::cout << "[A组状态] 数字位置已生成并准备发送，A组视觉流程完成"
                       << std::endl;
             return true;
         }
@@ -517,8 +525,7 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamA(
 
     if (teamAStage_ == TeamAStage::WaitingBeans)
     {
-        // A组第一阶段只收集豆子。三类必须在同一轮多帧投票中全部稳定，
-        // 然后按平均中心X从左到右一次性保存；少一个时不会部分写入。
+        // A组第一阶段只收集豆子。完整3目标排列通过多帧一致性投票后整批保存。
         // 因而beanPlaces[0..2]代表物理位置1~3，而不是固定代表黄、绿、白。
         collector_.addBeanFrame(detections);                // 累计豆子帧；中间投票不刷屏
 
@@ -526,21 +533,16 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamA(
         {
             std::cout << "[A组识别] 3个豆子全部识别完成" << std::endl;
             logTeamABeanPositions();                       // 固定按黄、绿、白输出各自位置
-
-            // 豆子阶段不发送数据。保留识别结果并进入数字阶段；相机关闭再打开时，
-            // 同一进程会继续使用内存数据，程序重启时可通过version 3断点恢复。
-            teamAStage_ = TeamAStage::WaitingDigits;
-            if (!saveProgress())
-                std::cerr << "[WorkflowResume] 豆子位置已识别，但断点保存失败" << std::endl;
-            std::cout << "[A组状态] 豆子位置已保存，下一步：识别5个数字箱位"
-                      << std::endl;
+            // 第一次发送固定3字节：[黄豆位置, 绿豆位置, 白芸豆位置]。
+            packets.push_back(emitPacket(VisionMessageType::TeamABeanPositions,
+                                          teamABeanPositionsData()));
         }
         return packets;
     }
 
     if (teamAStage_ == TeamAStage::WaitingDigits)
     {
-        // 第二阶段只收集数字箱。boxPlaces[0..4]依次代表从左到右的place1~place5，
+        // 第二阶段只收集数字箱。boxPlaces[0..4]依次代表从右到左的place1~place5，
         // 数组值是各物理位置上识别到的数字。
         collector_.addBoxFrame(detections);                 // 累计数字箱帧；中间投票不刷屏
 
@@ -548,12 +550,12 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamA(
         {
             std::cout << "[A组识别] 5个箱位数字全部识别完成" << std::endl;
             logDigitLayout();                              // 显示完整5个箱位，便于现场核对
-            logTeamAFinalResult();                         // 显示最终6字节业务含义
+            logTeamADigitPositions();                      // 显示第二次发送的3字节业务含义
 
-            // A组只发送一次：前3字节是黄/绿/白豆的位置，后3字节是数字1/2/3的位置。
-            // 数字4和5仍需识别来确认五个箱位完整，但不进入最终DATA。
-            packets.push_back(emitPacket(VisionMessageType::TeamAResult,
-                                          teamAResultData()));
+            // 第二次发送固定3字节：[数字1位置, 数字2位置, 数字3位置]。
+            // 数字4和5仍用于确认布局完整，但不进入A组DATA。
+            packets.push_back(emitPacket(VisionMessageType::TeamADigitPositions,
+                                          teamADigitPositionsData()));
         }
     }
     return packets;
@@ -583,7 +585,7 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamB(
 
     if (teamBStage_ == TeamBStage::WaitingDigits)
     {
-        // 数字按画面从左到右写入place1~place5，数组值不做反向换算。
+        // 数字按画面从右到左写入place1~place5，数组值不做反向换算。
         collector_.addBoxFrame(detections);                 // 中间投票不输出，完成时统一显示
         if (collector_.boxReady())
         {
@@ -625,18 +627,21 @@ std::vector<uint8_t> CompetitionWorkflow::digitsData() const
     return data;
 }
 
-std::vector<uint8_t> CompetitionWorkflow::teamAResultData() const
+std::vector<uint8_t> CompetitionWorkflow::teamABeanPositionsData() const
 {
-    // 固定业务顺序非常重要，不能直接发送beanPlaces或boxPlaces原数组：
-    // beanPlaces是“位置 -> 豆子类型”，boxPlaces是“位置 -> 数字”；
-    // 电控需要的是按“黄豆、绿豆、白芸豆”固定排列的反向位置查询结果。
     return {
         beanPosition(BeanType::Soybean),                    // DATA[0]：黄豆在第几个位置
         beanPosition(BeanType::MungBean),                   // DATA[1]：绿豆在第几个位置
-        beanPosition(BeanType::WhiteKidneyBean),            // DATA[2]：白芸豆在第几个位置
-        digitPosition(1),                                   // DATA[3]：黄豆对应数字1所在箱位
-        digitPosition(2),                                   // DATA[4]：绿豆对应数字2所在箱位
-        digitPosition(3)                                    // DATA[5]：白芸豆对应数字3所在箱位
+        beanPosition(BeanType::WhiteKidneyBean)             // DATA[2]：白芸豆在第几个位置
+    };
+}
+
+std::vector<uint8_t> CompetitionWorkflow::teamADigitPositionsData() const
+{
+    return {
+        digitPosition(1),                                   // DATA[0]：数字1所在箱位
+        digitPosition(2),                                   // DATA[1]：数字2所在箱位
+        digitPosition(3)                                    // DATA[2]：数字3所在箱位
     };
 }
 
@@ -688,18 +693,13 @@ void CompetitionWorkflow::logTeamABeanPositions() const
               << soybean << ' ' << mungBean << ' ' << whiteKidney << "]" << std::endl;
 }
 
-void CompetitionWorkflow::logTeamAFinalResult() const
+void CompetitionWorkflow::logTeamADigitPositions() const
 {
-    const std::vector<uint8_t> data = teamAResultData();
-    std::cout << "[A组最终结果] DATA=["
+    const std::vector<uint8_t> data = teamADigitPositionsData();
+    std::cout << "[A组数字位置] 按数字1/2/3固定顺序 = ["
               << static_cast<int>(data[0]) << ' '
               << static_cast<int>(data[1]) << ' '
-              << static_cast<int>(data[2]) << ' '
-              << static_cast<int>(data[3]) << ' '
-              << static_cast<int>(data[4]) << ' '
-              << static_cast<int>(data[5]) << "]，含义=[黄豆位置 绿豆位置 白芸豆位置 "
-                 "数字1位置 数字2位置 数字3位置]"
-              << std::endl;
+              << static_cast<int>(data[2]) << ']' << std::endl;
 }
 
 void CompetitionWorkflow::logBeanResult(int beanIndex, const char *stage) const
