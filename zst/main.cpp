@@ -112,13 +112,14 @@ int main(int argc, char **argv)
 
     // 两队共用识别算法、协议编码和物理串口，只切换上层流程状态机。
     // TeamA：3个豆子 -> 5个数字 -> 一次发送6字节位置结果。
-    // 数字识别缓存由A/B共用：每个角度凑齐配置数量后，按多帧平均X从左到右整批保存。
+    // A组3豆和A/B数字均要求完整目标同帧出现，并以多帧X顺序一致性投票确认。
     // TeamB：中心第1个豆子 -> 全部数字place1~5 -> 中心剩余新豆子；类型顺序不固定。
     CompetitionWorkflow workflow(config.workflow);      // 创建比赛工作流
     std::cout << "[Main] 当前队伍: " << teamModeToString(config.workflow.mode)
               << "，投票帧数=" << config.workflow.voteFramesPerStage
-              << "，最少命中=" << config.workflow.minHitsPerStage
-              << "，数字识别=前四位稳定识别+place5推断"
+              << "，B组单豆最少命中=" << config.workflow.minHitsPerStage
+              << "，完整排列一致阈值=" << config.workflow.minConsistentOrderFrames
+              << "，数字识别=四目标顺序投票+place5推断"
               << "，B组中心区域宽度="
               << (config.workflow.teamBCenterWidthRatio * 100.0f) << "%" << std::endl;
     std::cout << "[Main] 串口模式: " << (config.serial.simulated ? "模拟发送" : "真实串口")
@@ -336,7 +337,7 @@ int main(int argc, char **argv)
             sendWorkflowResult(tx);
         }
 
-        // place1~place4按多帧平均X排序确认后，place5由15减去前四位数字之和推断。
+        // place1~place4通过完整帧X顺序多数票确认后，place5由15减去前四位数字之和推断。
         // 这里同时在debug终端和画面显示最终五位数组；两队共用同一套数字缓存逻辑。
         if (config.runMode == AppRunMode::Debug && workflow.state().boxReady)
         {

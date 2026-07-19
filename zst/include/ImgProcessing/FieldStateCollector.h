@@ -4,6 +4,7 @@
 #include "ImgProcessing/FieldState.h"
 #include "ImgProcessing/VisionTypes.h"
 #include <array>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -14,21 +15,14 @@ struct FieldStateCollectorConfig
     // 例如这里设置 20，表示一个角度连续看 20 帧后再投票。
     int voteFramesPerAngle = 20;    // 每个观察角度需要累计的帧数
 
-    // 某个类别在当前角度至少出现多少帧才可信。
-    // 例如 20 帧里至少出现 10 帧，才会被加入本角度结果。
-    int minHitsPerAngle = 10;        // 当前角度内最少出现次数阈值
+    // B组中心豆子是单目标识别，仍按类别在一轮中的命中次数判断稳定性。
+    int minHitsPerAngle = 10;
 
-    // 豆子一次提交前至少需要多少个稳定、未保存的新类别。
-    // A组设为3：必须黄豆、绿豆、白芸豆全部稳定出现后，才按平均X整批写入；
-    // 少任何一个都不允许部分保存。B组设为1：中心豆子稳定后立即保存并发送。
-    int minNewBeansPerCommit = 3;
+    // A组豆子和A/B数字必须在同一帧出现完整集合，并按X排序形成顺序票。
+    // 例如20帧中至少15帧的完整排列完全相同，才允许保存。
+    int minConsistentOrderFrames = 15;
 
-    // 每次豆子角度提交最多接受几个”新豆子”。
-    // 队伍A一次可能看到多个豆子，使用3；队伍B要求”识别一个、发送一个”，使用1。
-    // 这个限制只影响豆子，不影响数字箱；小于等于0表示不限制。
-    int maxNewBeansPerCommit = 3;   // 单次角度提交最多新增的豆子数
-
-    // false（A组）：稳定候选按X从左到右全部处理。
+    // false（A组）：只统计同帧3豆完整X顺序票。
     // true（B组）：只处理投票次数最多的一个中心候选；若它已识别过，本轮不改选其他豆子。
     bool selectMostFrequentBeanOnly = false;
 };
@@ -47,14 +41,14 @@ class FieldStateCollector
 public:
     explicit FieldStateCollector(const FieldStateCollectorConfig &config);
 
-    // 豆子阶段调用：A组必须凑齐全部稳定豆子后按多帧平均X整批保存；
+    // 豆子阶段调用：A组仅对同帧完整出现的3种豆子按X排序并投票；
     // B组由配置只选最稳定的中心候选。已保存类型不会重复占用bean_place。
     // 同一帧同一豆子类别最多计票一次，重复框只保留置信度最高的一个。
     AngleCommitResult addBeanFrame(const std::vector<Detection> &detections);
 
-    // 数字箱阶段调用：累计若干帧后必须恰好得到4个稳定且互不重复的数字，
-    // 再按多帧平均X从左到右写入place1~4，并用1~5总和15推断place5。
-    // 同一数字在同一帧最多计票一次，避免重复框把命中次数和平均X坐标带偏。
+    // 数字箱阶段调用：仅当同一帧恰好出现4个不同数字时，才按X排序形成一张顺序票；
+    // 一轮内相同顺序达到阈值后写入place1~4，并用1~5总和15推断place5。
+    // 同一数字在同一帧最多保留一个框，避免重复框破坏完整排列。
     AngleCommitResult addBoxFrame(const std::vector<Detection> &detections);
 
     const FieldState &state() const;     // 获取当前已保存的整场状态
@@ -73,8 +67,7 @@ public:
 private:
     struct CandidateStat
     {
-        // 豆子阶段：id 表示豆子编码，1黄豆，2绿豆，3白芸豆。
-        // 箱子阶段：id 表示数字，1~5。
+        // 仅供B组中心豆子使用：id表示豆子编码，1黄豆，2绿豆，3白芸豆。
         int id = 0;
 
         // 当前角度的若干帧中，这个 id 被识别到的次数。
@@ -93,9 +86,7 @@ private:
     void resetBeanAngle();
     void resetBoxAngle();
 
-    // 当前豆子角度累计够 voteFramesPerAngle 后调用。
-    // A组只有稳定新豆子数量达到minNewBeansPerCommit时才按X整批写入；
-    // B组只确认中心最高票候选并逐个保存。
+    // 当前豆子累计够 voteFramesPerAngle 后调用：A组核对完整排列票，B组核对单目标票。
     AngleCommitResult commitBeanAngle();
 
     // 当前数字箱累计够 voteFramesPerAngle 后调用；固定执行“前四位识别+place5推断”。
@@ -112,6 +103,10 @@ private:
     // 当前箱子角度已经累计了多少帧。
     int boxFrameCount_ = 0;
 
+    // A组豆子/数字在首次看到完整目标集合后才启动20帧窗口。
+    bool beanOrderVotingStarted_ = false;
+    bool boxOrderVotingStarted_ = false;
+
     // 下一个要写入的豆子固定位置下标，范围 0~2。
     int nextBeanIndex_ = 0;
 
@@ -121,8 +116,11 @@ private:
     // 下标 1~3 分别表示黄豆、绿豆、白芸豆。
     std::array<CandidateStat, 4> beanStats_{};
 
-    // 下标 1~5 分别表示数字 1~5。
-    std::array<CandidateStat, 6> boxStats_{};
+    // A组豆子完整帧的从左到右排列票；只有同帧3类齐全时才记一票。
+    std::map<std::array<int, 3>, int> beanOrderVotes_;
+
+    // 数字完整帧的从左到右排列票；只有同帧恰好4个不同数字时才记一票。
+    std::map<std::array<int, 4>, int> boxOrderVotes_;
 
     // 记录某种豆子是否已经保存过。
     // 这样多角度重叠识别时，同一种豆子不会重复占位置。

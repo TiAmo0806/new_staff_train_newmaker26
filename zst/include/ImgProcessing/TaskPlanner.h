@@ -8,7 +8,7 @@
 struct PlannerConfig
 {
     // 目标连续稳定多少帧后才认为可发送给电控。
-    int minStableFrames = 3;    // 连续稳定帧数阈值，低于此值不输出 valid 决策
+    int minStableFrames = 10;    // 连续稳定帧数阈值，低于此值不输出 valid 决策
 };
 
 class TaskPlanner

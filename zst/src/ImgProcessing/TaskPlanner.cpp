@@ -7,7 +7,8 @@ Detection TaskPlanner::chooseBestBean(const std::vector<Detection> &detections) 
 {
     Detection best;                                     // 默认构造，score=0
     for (const auto &d : detections)
-        if (d.kind == TargetKind::Bean && d.score > best.score) best = d; // 选置信度最高的豆子
+        if (d.kind == TargetKind::Bean && d.score > best.score)
+         best = d; // 选置信度最高的豆子
     return best;
 }
 
@@ -25,7 +26,6 @@ VisionDecision TaskPlanner::update(const std::vector<Detection> &detections, con
 
     // 第一步：先确定当前看到的豆子类别。
     // 目前策略很简单：选置信度最高的豆子框。
-    // 如果以后机械一次只处理某个取货位，可以在这里加入 ROI 区域限制。
     Detection bean = chooseBestBean(detections);        // 选最优豆子
     if (bean.bean == BeanType::Unknown)
     {
@@ -36,7 +36,6 @@ VisionDecision TaskPlanner::update(const std::vector<Detection> &detections, con
     }
 
     // 第二步：按规则找到该豆子应该去的数字箱。
-    // 规则来自比赛手册：
     //   黄豆必须放入数字 1 货箱；
     //   绿豆必须放入数字 2 货箱；
     //   白芸豆必须放入数字 3 货箱；

@@ -29,9 +29,9 @@ serial:
 workflow:
   team_mode: "team_a"                  # 只选择电脑内部流程，不作为字段发送给电控
   vote_frames_per_stage: 20            # 每个阶段累计多少帧后投票
-  min_hits_per_stage: 6                # 目标至少命中多少帧才算稳定
-                                        # A组须三种豆子都达标才整批按平均X排序保存；B组中心豆子逐个保存
-                                        # 数字固定识别place1~4，再用15减去前四位数字之和推断place5
+  min_hits_per_stage: 6                # 仅B组中心单豆：类别至少命中多少帧才算稳定
+  min_consistent_order_frames: 15      # A组3豆/数字4目标：同帧完整排列至少15/20帧一致才保存
+                                        # 数字排列通过后，再用15减去前四位数字之和推断place5
   team_b_center_width_ratio: 0.40      # 仅B组：只接受画面横向中间40%的豆子，A组不受影响
   clear_progress_on_start: true        # 每次启动自动删除上场断点；相机0/1开关不会清理当前内存
   resume_progress: true                # 仍保存本场断点；只有把上一项临时改false时才允许启动恢复

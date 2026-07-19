@@ -109,15 +109,13 @@ CompetitionWorkflow::CompetitionWorkflow(const CompetitionWorkflowConfig &config
 
 FieldStateCollector CompetitionWorkflow::makeCollector() const
 {
-    // TeamA必须等三类豆子全部稳定后按平均X整批写入；TeamB要求中心豆子
-    // “识别一个、发送一个”，因此两队的最小提交数和单次上限分别配置。
+    // TeamA使用完整3豆排列一致性投票；TeamB仍按中心单豆类别投票。
     FieldStateCollectorConfig collectorConfig;
     collectorConfig.voteFramesPerAngle = std::max(1, config_.voteFramesPerStage);   // 至少 1 帧
     collectorConfig.minHitsPerAngle = std::max(1, config_.minHitsPerStage);         // 至少 1 次
-    collectorConfig.minNewBeansPerCommit =
-        config_.mode == TeamMode::TeamA ? 3 : 1;              // A组必须3个齐全；B组中心豆子逐个确认
-    collectorConfig.maxNewBeansPerCommit =
-        config_.mode == TeamMode::TeamB ? 1 : 3;            // TeamB 每次最多新增 1 个豆子
+    collectorConfig.minConsistentOrderFrames =
+        std::clamp(config_.minConsistentOrderFrames, 1,
+                   collectorConfig.voteFramesPerAngle);
     collectorConfig.selectMostFrequentBeanOnly =
         config_.mode == TeamMode::TeamB;                    // B组重复中心豆子不会改选旁边候选
     return FieldStateCollector(collectorConfig);
