@@ -1,7 +1,7 @@
 camera:
-  exposure_us: 8000           #曝光时间8ms
-  gain: 8                     #模拟增益
-  auto_exposure: true
+  exposure_us: 30000           #曝光时间8ms
+  gain: 8                    #模拟增益
+  auto_exposure: false
   frame_timeout_ms: 200       # 单次等帧超时；比原来的1000ms更快发现USB/相机异常
   reconnect_after_failures: 5 # 连续失败5次后自动关闭并重新打开相机
 
@@ -19,12 +19,12 @@ model:
 serial:
   port: "/dev/ttyACM0"                 # STM32 CDC 常见为 ttyACM，USB转串口常见为 ttyUSB
   baudrate: 115200                      # 当前 C++ 实现固定为 115200-8-N-1
-  simulated: true                       # true只打印不发送；接上电控实测时改为 false
+  simulated: true                      # true只打印不发送；接上电控实测时改为 false
   tx_log: true                          # 打印 A6...CRC 的完整十六进制发送帧
   rx_log: true                          # 打印 5A camera_state CRC 的电控接收帧
 
 # 两个队伍使用不同 C 板、不同时间上场，但共用视觉程序和物理串口。
-# team_a：先识别3个豆子，再识别5个数字；最终一次发送黄/绿/白豆位置和数字1/2/3位置。
+# team_a：识别3个豆子后发送0x10；再识别数字并发送0x11，共两次3字节结果。
 # team_b：中心第1个豆子 -> 全部数字位置数组 -> 中心剩余新豆子；豆子顺序不固定。
 workflow:
   team_mode: "team_a"                  # 只选择电脑内部流程，不作为字段发送给电控

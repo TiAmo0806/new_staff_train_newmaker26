@@ -128,6 +128,7 @@ void CompetitionWorkflow::resetMemory()
     collector_ = makeCollector();                           // 按当前模式重建收集器
     teamAStage_ = TeamAStage::WaitingBeans;                 // TeamA 新流程从3个豆子阶段开始
     teamBStage_ = TeamBStage::WaitingFirstBean;             // TeamB 从任意中心豆子开始
+    pendingPacket_.reset();                                 // 新比赛/切队不保留旧待发送包
 }
 
 void CompetitionWorkflow::reset()
@@ -426,6 +427,11 @@ const FieldState &CompetitionWorkflow::state() const
 VisionTxPacket CompetitionWorkflow::emitPacket(VisionMessageType type,
                                                 const std::vector<uint8_t> &data)
 {
+    // update()会优先返回已有待发送包，正常情况下不会重复进入这里。
+    // 保留防御分支，避免未来调用路径在发送未确认时覆盖业务结果。
+    if (pendingPacket_)
+        return *pendingPacket_;
+
     std::cout << "[发送准备] mode=" << teamModeToString(config_.mode)
               << ", cmd=" << visionMessageTypeToString(type)
               << ", data=[";
@@ -436,21 +442,19 @@ VisionTxPacket CompetitionWorkflow::emitPacket(VisionMessageType type,
     }
     std::cout << "]" << std::endl;
 
-    VisionTxPacket packet = buildWorkflowPacket(type, data);
-
-    // 无ACK模式下立即推进，避免下一帧重复生成同一阶段结果。
-    if (!advanceStageAfterSend(type))
-        std::cerr << "[Workflow] 当前阶段与待发送CMD不一致，未推进流程" << std::endl;
-    else if (!saveProgress())
-        std::cerr << "[WorkflowResume] 结果已生成，但断点保存失败" << std::endl;
-
-    return packet;
+    pendingPacket_ = buildWorkflowPacket(type, data);
+    return *pendingPacket_;
 }
 
 std::vector<VisionTxPacket> CompetitionWorkflow::update(
     const std::vector<Detection> &detections,
     int imageWidth)
 {
+    // 串口写入失败时main不会调用confirmSent，因此这里持续返回完全相同的待发送包，
+    // 不再累计识别、不生成新结果，也不推进A/B阶段。
+    if (pendingPacket_)
+        return {*pendingPacket_};
+
     // 流程结束后不再累计投票，也不重复发送完成消息。
     if (finished()) return {};                              // 已完成，直接返回空
 
@@ -458,6 +462,32 @@ std::vector<VisionTxPacket> CompetitionWorkflow::update(
     return config_.mode == TeamMode::TeamA
         ? updateTeamA(detections)                           // TeamA 流程
         : updateTeamB(detections, imageWidth);              // TeamB 中心豆子流程
+}
+
+bool CompetitionWorkflow::confirmSent(const VisionTxPacket &packet)
+{
+    if (!pendingPacket_ ||
+        pendingPacket_->command != packet.command ||
+        pendingPacket_->data != packet.data)
+    {
+        std::cerr << "[Workflow] 串口成功包与当前待发送包不一致，拒绝推进阶段"
+                  << std::endl;
+        return false;
+    }
+
+    const VisionMessageType type = static_cast<VisionMessageType>(packet.command);
+    if (!advanceStageAfterSend(type))
+    {
+        std::cerr << "[Workflow] 当前阶段与已写入CMD不一致，未推进流程" << std::endl;
+        return false;
+    }
+
+    // 串口完整写入成功后不再重发该包。断点写入失败只影响进程重启恢复，
+    // 不能因此重发已经写入线路的消息，否则可能让电控重复触发业务。
+    pendingPacket_.reset();
+    if (!saveProgress())
+        std::cerr << "[WorkflowResume] 串口已完整写入，但断点保存失败" << std::endl;
+    return true;
 }
 
 bool CompetitionWorkflow::advanceStageAfterSend(VisionMessageType command)
@@ -468,7 +498,7 @@ bool CompetitionWorkflow::advanceStageAfterSend(VisionMessageType command)
             command == VisionMessageType::TeamABeanPositions)
         {
             teamAStage_ = TeamAStage::WaitingDigits;
-            std::cout << "[A组状态] 豆子位置已生成并准备发送，下一步：识别数字位置"
+            std::cout << "[A组状态] 豆子位置已完整写入串口，下一步：识别数字位置"
                       << std::endl;
             return true;
         }
@@ -476,7 +506,7 @@ bool CompetitionWorkflow::advanceStageAfterSend(VisionMessageType command)
             command == VisionMessageType::TeamADigitPositions)
         {
             teamAStage_ = TeamAStage::Finished;
-            std::cout << "[A组状态] 数字位置已生成并准备发送，A组视觉流程完成"
+            std::cout << "[A组状态] 数字位置已完整写入串口，A组视觉流程完成"
                       << std::endl;
             return true;
         }
@@ -487,7 +517,7 @@ bool CompetitionWorkflow::advanceStageAfterSend(VisionMessageType command)
         command == VisionMessageType::BeanCode)
     {
         teamBStage_ = TeamBStage::WaitingDigits;
-        std::cout << "[B组状态] 第一个豆子已生成并准备发送，下一步：识别5个数字位置"
+        std::cout << "[B组状态] 第一个豆子已完整写入串口，下一步：识别5个数字位置"
                   << std::endl;
         return true;
     }
@@ -495,7 +525,7 @@ bool CompetitionWorkflow::advanceStageAfterSend(VisionMessageType command)
         command == VisionMessageType::DigitLayout)
     {
         teamBStage_ = TeamBStage::WaitingRemainingBeans;
-        std::cout << "[B组状态] 数字数组已生成并准备发送，下一步：识别中心位置的新豆子"
+        std::cout << "[B组状态] 数字数组已完整写入串口，下一步：识别中心位置的新豆子"
                   << std::endl;
         return true;
     }
@@ -505,12 +535,12 @@ bool CompetitionWorkflow::advanceStageAfterSend(VisionMessageType command)
         if (collector_.beanReady())
         {
             teamBStage_ = TeamBStage::Finished;
-            std::cout << "[B组状态] 第三个豆子已生成并准备发送，B组视觉流程完成"
+            std::cout << "[B组状态] 第三个豆子已完整写入串口，B组视觉流程完成"
                       << std::endl;
         }
         else
         {
-            std::cout << "[B组状态] 当前豆子已生成并准备发送，继续等待中心位置的未识别豆子"
+            std::cout << "[B组状态] 当前豆子已完整写入串口，继续等待中心位置的未识别豆子"
                       << std::endl;
         }
         return true;

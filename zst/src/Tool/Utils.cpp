@@ -153,7 +153,16 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
             if (w["team_mode"])
             {
                 const std::string mode = w["team_mode"].as<std::string>();
-                config.workflow.mode = mode == "team_b" ? TeamMode::TeamB : TeamMode::TeamA;
+                if (mode == "team_a")
+                    config.workflow.mode = TeamMode::TeamA;
+                else if (mode == "team_b")
+                    config.workflow.mode = TeamMode::TeamB;
+                else
+                {
+                    std::cerr << "[Config] workflow.team_mode只能是team_a或team_b，当前值="
+                              << mode << std::endl;
+                    return false;
+                }
             }
             if (w["vote_frames_per_stage"])
                 config.workflow.voteFramesPerStage = w["vote_frames_per_stage"].as<int>();

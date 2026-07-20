@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <iomanip>
 #include <iostream>
+#include <poll.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -56,7 +57,69 @@ bool VirtualSerial::isOpen() const
     return config_.simulated || fd_ >= 0;       // 模拟模式始终视为打开
 }
 
-bool VirtualSerial::sendPacket(const VisionTxPacket &packet, int maxRetries)
+bool VirtualSerial::writeFrameFully(const std::vector<uint8_t> &frame, int timeoutMs)
+{
+    if (fd_ < 0 || frame.empty()) return false;
+
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(std::max(1, timeoutMs));
+    size_t offset = 0;
+
+    while (offset < frame.size())
+    {
+        const ssize_t written = write(fd_, frame.data() + offset, frame.size() - offset);
+        if (written > 0)
+        {
+            offset += static_cast<size_t>(written);       // 下次只写尚未发送的剩余字节
+            continue;
+        }
+
+        if (written < 0 && errno == EINTR) continue;      // 被信号打断，原偏移立即重试
+
+        const bool temporarilyUnavailable =
+            written == 0 ||
+            (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
+        if (!temporarilyUnavailable)
+        {
+            std::cerr << "[Serial] 写入失败，offset=" << offset << '/' << frame.size()
+                      << "，errno=" << errno << std::endl;
+            closePort();                                  // 设备错误，下次由上层重新连接并重发业务包
+            return false;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline)
+        {
+            std::cerr << "[Serial] 整帧写入超时，offset=" << offset << '/'
+                      << frame.size() << std::endl;
+            closePort();                                  // 丢弃可能残留的半帧连接状态
+            return false;
+        }
+
+        const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - now).count();
+        pollfd descriptor{};
+        descriptor.fd = fd_;
+        descriptor.events = POLLOUT;
+        const int pollResult = poll(&descriptor, 1, static_cast<int>(std::max<int64_t>(1, remainingMs)));
+
+        if (pollResult < 0 && errno == EINTR) continue;
+        if (pollResult <= 0 ||
+            (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+        {
+            std::cerr << "[Serial] 等待可写失败，offset=" << offset << '/'
+                      << frame.size() << "，poll=" << pollResult
+                      << "，revents=0x" << std::hex << descriptor.revents
+                      << std::dec << std::endl;
+            closePort();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool VirtualSerial::sendPacket(const VisionTxPacket &packet, int timeoutMs)
 {
     // 无ACK简化协议：A6 + CMD + 固定长度DATA + CRC16。
     std::vector<uint8_t> frame;
@@ -90,25 +153,17 @@ bool VirtualSerial::sendPacket(const VisionTxPacket &packet, int maxRetries)
         return false;
     }
 
-    // 非阻塞串口可能暂时写不进去，因此短暂重试。这里要求一次 write 写完整帧；
-    // 若将来DATA很长，应改成循环处理"部分写入"，防止半帧被当作失败后重复发送。
-    for (int i = 0; i < maxRetries; ++i)
+    // O_NONBLOCK可能返回部分写入。writeFrameFully保存offset并只发送剩余字节，
+    // 绝不会在同一次发送中从帧头重新开始，因此不会主动制造重复帧头和残帧。
+    if (writeFrameFully(frame, timeoutMs))
     {
-        if (write(fd_, frame.data(), frame.size()) == static_cast<ssize_t>(frame.size()))
-        {
-            std::cout << "[Serial] 实际发送成功，字节数=" << frame.size()
-                      << "，尝试次数=" << (i + 1) << std::endl;
-            return true;
-        }
-        usleep(1000);                               // 等待 1ms 后重试
+        std::cout << "[Serial] 整帧完整写入成功，字节数=" << frame.size() << std::endl;
+        return true;
     }
-    const bool sent = tryReconnect() &&
-        write(fd_, frame.data(), frame.size()) == static_cast<ssize_t>(frame.size());
-    if (sent)
-        std::cout << "[Serial] 重连后发送成功，字节数=" << frame.size() << std::endl;
-    else
-        std::cerr << "[Serial] 重试和重连后仍发送失败" << std::endl;
-    return sent;
+
+    // 不在传输层对半帧重新发送整帧。返回失败后由CompetitionWorkflow保留同一业务包，
+    // 下一帧调用sendPacket时先重连，再从完整帧头开始一次新的业务重试。
+    return false;
 }
 
 bool VirtualSerial::receiveCameraState(uint8_t &cameraState)

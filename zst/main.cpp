@@ -215,7 +215,7 @@ int main(int argc, char **argv)
                   << static_cast<int>(packet.command) << std::dec << std::endl;
         const bool written = serial.sendPacket(packet);
         if (!written)
-            std::cerr << "[Serial] 本次识别结果发送失败；无ACK模式不会自动重发"
+            std::cerr << "[Serial] 本次完整写入失败；工作流保持当前阶段，下一帧重试同一包"
                       << std::endl;
         return written;
     };
@@ -357,14 +357,16 @@ int main(int argc, char **argv)
 
         // 7. 当前队伍工作流决定"这一帧是否产生阶段消息"。
         // update只处理识别顺序和生成消息，不直接操作串口，因此TeamA/B流程可以独立测试。
-        // 无ACK模式下，每个阶段结果生成后立即推进，并把该阶段消息发送一次。
+        // 无ACK模式下，只有整帧完整写入Linux串口后才推进；失败时保持待发送状态重试。
         // imageWidth用于B组选择最靠近画面中心的豆子；A组按从右到左规则排序。
         const std::vector<VisionTxPacket> packets =
             workflow.update(result.detections, frame.cols); // 工作流更新
         for (const VisionTxPacket &tx : packets)
         {
-            // 当前每个阶段最多产生一条结果，直接通过串口发送，不等待电控确认。
-            sendWorkflowResult(tx);
+            // 当前每个阶段最多产生一条结果。没有电控ACK，但本机写入失败绝不推进。
+            if (sendWorkflowResult(tx) && !workflow.confirmSent(tx))
+                std::cerr << "[Main] 串口已写入，但工作流确认失败，请检查状态机"
+                          << std::endl;
         }
 
         // place1~place4通过完整帧X顺序多数票确认后，place5由15减去前四位数字之和推断。

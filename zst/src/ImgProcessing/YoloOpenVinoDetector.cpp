@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
+
 namespace
 {
 // 类别顺序必须与训练YOLO模型时的数据集类别顺序完全一致。
@@ -276,7 +277,7 @@ std::vector<Detection> YoloOpenVinoDetector::infer(
     // 程序会等待这一帧推理完成后再继续。
     inferRequest_.infer();
     // 获取模型输出张量。
-    const ov::Tensor outputTensor =
+    ov::Tensor outputTensor =
         inferRequest_.get_output_tensor();
     // 获取输出形状，正常应该是[1,12,8400]。
     const ov::Shape outputShape =
@@ -288,7 +289,7 @@ std::vector<Detection> YoloOpenVinoDetector::infer(
     // 获取输出张量的数据指针。
     // const float表示只能读取数据，不能通过这个指针修改数据。
     const float *outputData =
-        outputTensor.data<const float>();
+        outputTensor.data<float>();
     // 解析YOLO输出并返回最终检测结果。
     return postprocess( outputData, shape,letterboxInfo,frame.size());
 }

@@ -51,7 +51,8 @@ public:
 
     // 发送：[0xA6][CMD][DATA...][CRC_L][CRC_H]。
     // CRC覆盖帧头、CMD和全部DATA，不包含末尾两个CRC字节。
-    bool sendPacket(const VisionTxPacket &packet, int maxRetries = 3);
+    // timeoutMs是整帧总写入超时；部分写入时会从剩余偏移继续，不会重发帧头。
+    bool sendPacket(const VisionTxPacket &packet, int timeoutMs = 50);
 
     // 非阻塞接收电控相机控制帧。可处理半帧、粘包、噪声和串口重连。
     // 返回true表示解析到一个CRC正确的camera_state。
@@ -59,6 +60,7 @@ public:
 
 private:
     bool configurePort();
+    bool writeFrameFully(const std::vector<uint8_t> &frame, int timeoutMs);
     std::string findAvailablePort() const;
     bool tryReconnect();
 

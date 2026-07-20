@@ -3,6 +3,7 @@
 
 #include "Communication/VisionProtocol.h"
 #include "ImgProcessing/FieldStateCollector.h"
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,8 +15,8 @@ struct CompetitionWorkflowConfig
     int minConsistentOrderFrames = 15;      // A组豆子/数字完整排列在一轮中至少一致多少帧
     float teamBCenterWidthRatio = 0.40f;    // B组中心豆子区域宽度比例
 
-    // 无ACK模式下，稳定结果生成并准备发送后立即推进阶段并保存断点。
-    // 这只能保证视觉端重启后续跑，不能证明电控已经实际收到数据。
+    // 无ACK模式下，稳定结果只有在本机完整写入串口后才推进阶段并保存断点。
+    // 这只能证明Linux写调用完成并支持视觉端续跑，不能证明电控已经解析数据。
     bool resumeProgress = true;
 
     // true（比赛默认）：程序每次启动都删除上场断点并从空状态开始，避免忘按R。
@@ -33,6 +34,10 @@ public:
     // 每处理完一帧调用一次；稳定结果出现时返回一条待发送消息。
     std::vector<VisionTxPacket> update(const std::vector<Detection> &detections,
                                        int imageWidth);
+
+    // main确认整帧已经完整写入Linux串口后调用；此时才推进阶段并保存断点。
+    // 当前仍是无ACK协议，这只代表本机写入成功，不代表电控已经确认收到。
+    bool confirmSent(const VisionTxPacket &packet);
 
     void switchMode(TeamMode mode); // 切队并清空状态
     void reset();                   // 新比赛清空内存和磁盘断点
@@ -63,7 +68,7 @@ private:
     bool saveProgress() const;
     void clearProgressFile() const;
 
-    // 建立无SEQ结果包，并立即推进到下一识别阶段、保存断点。
+    // 建立无SEQ结果包并保存为待发送状态；不在这里推进识别阶段。
     VisionTxPacket emitPacket(VisionMessageType type,
                               const std::vector<uint8_t> &data);
     bool advanceStageAfterSend(VisionMessageType type);
@@ -88,6 +93,7 @@ private:
     FieldStateCollector collector_;
     TeamAStage teamAStage_ = TeamAStage::WaitingBeans;
     TeamBStage teamBStage_ = TeamBStage::WaitingFirstBean;
+    std::optional<VisionTxPacket> pendingPacket_; // 写入失败时冻结流程并重试同一业务包
 };
 
 #endif // COMPETITION_WORKFLOW_H
