@@ -1,88 +1,141 @@
 cmake_minimum_required(VERSION 3.14)
-project(mvs_openvino_demo)
+project(mvs_openvino_demo LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
 
 # ============================================================
 # OpenCV
 # ============================================================
 find_package(OpenCV REQUIRED)
-include_directories(${OpenCV_INCLUDE_DIRS})
 
 # ============================================================
-# OpenVINO（pip 安装，直接指定路径）
+# OpenVINO Runtime
+#
+# 优先使用 find_package（官方安装/setupvars.sh），找不到时
+# 自动扫描 pip 安装路径和常见解压路径。
+#
+# 手动指定:
+#   cmake .. -DOpenVINO_DIR=~/.local/lib/python3.x/site-packages/openvino/runtime/cmake
+#   cmake .. -DOpenVINO_DIR=/opt/intel/openvino/runtime/cmake
+#   cmake .. -DOpenVINO_DIR=/home/pi/openvino_runtime/runtime/cmake
 # ============================================================
-set(OPENVINO_ROOT "$ENV{HOME}/.local/lib/python3.10/site-packages/openvino")
+find_package(OpenVINO QUIET)
+if(NOT OpenVINO_FOUND)
+    # pip 安装路径（支持多 Python 版本）
+    file(GLOB _pip_cmake_dirs
+        "$ENV{HOME}/.local/lib/python3.*/site-packages/openvino/runtime/cmake")
 
-# 头文件目录
-include_directories(${OPENVINO_ROOT}/include)
+    # tar.gz 解压到家目录
+    file(GLOB _tgz_cmake_dirs "$ENV{HOME}/openvino*/runtime/cmake")
 
-# 库文件目录
-# pip 安装的 .so 文件带版本后缀（如 libopenvino.so.2621），
-# 创建不带版本号的符号链接，使 -lopenvino 能被 ld 找到
-set(OPENVINO_LIB_DIR ${OPENVINO_ROOT}/libs)
-set(OPENVINO_LINK_DIR ${CMAKE_BINARY_DIR}/openvino_links)
+    set(_ov_candidates
+        ${_pip_cmake_dirs}
+        "/opt/intel/openvino/runtime/cmake"
+        ${_tgz_cmake_dirs}
+    )
+    foreach(_dir ${_ov_candidates})
+        if(EXISTS "${_dir}/OpenVINOConfig.cmake")
+            set(OpenVINO_DIR "${_dir}")
+            break()
+        endif()
+    endforeach()
 
-# 在 build 目录下创建符号链接
-file(MAKE_DIRECTORY ${OPENVINO_LINK_DIR})
-file(GLOB OPENVINO_SO_FILES "${OPENVINO_LIB_DIR}/libopenvino.so.*")
-if(OPENVINO_SO_FILES)
-    list(GET OPENVINO_SO_FILES 0 OPENVINO_SO_FILE)
-    get_filename_component(OPENVINO_SO_NAME ${OPENVINO_SO_FILE} NAME_WE)
-    # libopenvino.so.2621 → libopenvino.so
-    execute_process(COMMAND ln -sf ${OPENVINO_SO_FILE} ${OPENVINO_LINK_DIR}/libopenvino.so)
-    message(STATUS "[OpenVINO] 创建符号链接: libopenvino.so -> ${OPENVINO_SO_NAME}")
+    find_package(OpenVINO REQUIRED)
+endif()
+message(STATUS "[OpenVINO] dir: ${OpenVINO_DIR}")
+
+# ============================================================
+# MindVision 工业相机 SDK
+#
+# 移除硬编码路径，支持环境变量和自动搜索。
+#
+# 使用方式:
+#   export MINDVISION_ROOT=/path/to/mvs_sdk
+#   cmake ..
+#
+#   或:
+#   cmake .. -DMINDVISION_ROOT=/path/to/mvs_sdk
+#
+#   或: 将 SDK 放在项目同级目录（自动发现）:
+#   mvs_openvino_demo/../
+#     linuxSDK_V2.1.0.xxx/
+#       include/CameraApi.h
+#       lib/x64/libMVSDK.so
+# ============================================================
+set(MINDVISION_ROOT "$ENV{MINDVISION_ROOT}"
+    CACHE PATH "MindVision Linux SDK installation root")
+
+# 自动搜索项目同级目录下的 linuxSDK*
+file(GLOB MINDVISION_SIBLING_DIRS
+    LIST_DIRECTORIES true
+    "${CMAKE_CURRENT_SOURCE_DIR}/../linuxSDK*"
+)
+
+find_path(MINDVISION_INCLUDE_DIR
+    NAMES CameraApi.h
+    HINTS
+        "${MINDVISION_ROOT}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../linuxSDK"
+        ${MINDVISION_SIBLING_DIRS}
+    PATH_SUFFIXES include
+)
+
+find_library(MINDVISION_LIBRARY
+    NAMES MVSDK libMVSDK
+    HINTS
+        "${MINDVISION_ROOT}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../linuxSDK"
+        ${MINDVISION_SIBLING_DIRS}
+    PATH_SUFFIXES lib/x64 lib/amd64 lib lib64
+)
+
+if(NOT MINDVISION_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "找不到 CameraApi.h。请使用：\n"
+        "  cmake .. -DMINDVISION_ROOT=/你的/MindVision-Linux-SDK根目录\n"
+        "该根目录下面应包含 include/CameraApi.h")
 endif()
 
-# 也对 libopenvino_c 和 frontend 库创建链接
-file(GLOB OPENVINO_C_SO "${OPENVINO_LIB_DIR}/libopenvino_c.so.*")
-if(OPENVINO_C_SO)
-    list(GET OPENVINO_C_SO 0 OV_C_FILE)
-    execute_process(COMMAND ln -sf ${OV_C_FILE} ${OPENVINO_LINK_DIR}/libopenvino_c.so)
+if(NOT MINDVISION_LIBRARY)
+    message(FATAL_ERROR
+        "找不到 libMVSDK.so。请检查 MINDVISION_ROOT 下的 lib/x64、lib 或 lib64")
 endif()
 
-# 运行时需要的库：libopenvino.so.2621, libopenvino_c.so.2621, libopenvino_ir_frontend.so.2621, libtbb.so.12, libhwloc.so.15
-link_directories(${OPENVINO_LINK_DIR} ${OPENVINO_LIB_DIR})
-
-message(STATUS "[OpenVINO] root:    ${OPENVINO_ROOT}")
-message(STATUS "[OpenVINO] include: ${OPENVINO_ROOT}/include")
-message(STATUS "[OpenVINO] lib:     ${OPENVINO_LIB_DIR}")
+message(STATUS "[OpenCV]  version: ${OpenCV_VERSION}")
+message(STATUS "[MV_SDK] include: ${MINDVISION_INCLUDE_DIR}")
+message(STATUS "[MV_SDK] library: ${MINDVISION_LIBRARY}")
 
 # ============================================================
-# 迈德威视 SDK
+# 源文件
 # ============================================================
-set(MV_SDK_ROOT "/home/hu/mvs/linuxSDK_V2.1.0.49202602041120"
-    CACHE PATH "MindVision SDK root directory")
-include_directories(${MV_SDK_ROOT}/include)
-
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(MV_LIB_DIR ${MV_SDK_ROOT}/lib/x64)
-else()
-    set(MV_LIB_DIR ${MV_SDK_ROOT}/lib/x86)
-endif()
-link_directories(${MV_LIB_DIR})
-
-message(STATUS "[MV_SDK]  root: ${MV_SDK_ROOT}")
-message(STATUS "[MV_SDK]  lib:  ${MV_LIB_DIR}")
-
-# ============================================================
-# 项目自己的头文件目录
-# ============================================================
-include_directories(${PROJECT_SOURCE_DIR}/include)
-
-# ============================================================
-# 可执行文件（各模块的 .cpp 源文件）
-# ============================================================
-add_executable(${PROJECT_NAME}
+set(ALL_SOURCES
     main.cpp
     src/camera.cpp
+    src/config.cpp
     src/detector.cpp
-    src/preprocess.cpp
     src/spatial.cpp
     src/visualize.cpp
     src/CRC16.cpp
     src/VirtualSerial.cpp
+)
+# 注: src/preprocess.cpp 已移除 — 预处理由 OpenVINO PrePostProcessor 在模型图中完成
+
+add_executable(${PROJECT_NAME} ${ALL_SOURCES})
+
+# ============================================================
+# 头文件路径（target 级别，不污染全局 include）
+# ============================================================
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${OpenCV_INCLUDE_DIRS}
+    ${MINDVISION_INCLUDE_DIR}
 )
 
 # ============================================================
@@ -90,23 +143,16 @@ add_executable(${PROJECT_NAME}
 # ============================================================
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${OpenCV_LIBS}
-    openvino
-    MVSDK
+    openvino::runtime
+    ${MINDVISION_LIBRARY}
     pthread
     dl
 )
 
 # ============================================================
-# 将模型文件复制到 build 目录
-# 使用方式：先手动将 best.xml 和 best.bin 放到项目目录下，然后取消下面的注释
-#   或者直接将模型文件复制到 build 目录，运行时用参数指定路径
+# RPATH — 运行时自动找到 libMVSDK.so，无需 LD_LIBRARY_PATH
 # ============================================================
-# add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-#     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-#         ${PROJECT_SOURCE_DIR}/best.xml
-#         $<TARGET_FILE_DIR:${PROJECT_NAME}>/best.xml
-#     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-#         ${PROJECT_SOURCE_DIR}/best.bin
-#         $<TARGET_FILE_DIR:${PROJECT_NAME}>/best.bin
-#     COMMENT "Copying model files to build directory..."
-# )
+get_filename_component(MINDVISION_LIB_DIR "${MINDVISION_LIBRARY}" DIRECTORY)
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    BUILD_RPATH "${MINDVISION_LIB_DIR}"
+)
