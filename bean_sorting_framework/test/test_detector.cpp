@@ -35,7 +35,7 @@
 
       // 加载模型
       BeanDetector detector;
-      const char* model_path = "models/bean_detect.onnx";
+      const char* model_path = "models/best5.xml";
       if (!detector.loadModel(model_path)) {
           std::cerr << "模型加载失败: " << model_path << std::endl;
           return -1;

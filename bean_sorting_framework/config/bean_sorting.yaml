@@ -6,7 +6,7 @@
     gain: 10
 
   model:
-    path: "best5.onnx"
+    path: "best7.onnx"
     conf_threshold: 0.6
     nms_threshold: 0.05
     input_width: 640

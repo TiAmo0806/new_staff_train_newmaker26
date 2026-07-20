@@ -4,11 +4,18 @@
 #include <csignal>
 #include <atomic>
 #include <algorithm>
+#include <string>
 #include <opencv2/opencv.hpp>
 #include <yaml-cpp/yaml.h>
 #include "Communication/BeanProtocol.h"
 #include "Communication/BeanSerial.h"
 #include "Detector/BeanDetector.h"
+
+#ifdef __linux__
+#include <unistd.h>
+#include <libgen.h>
+#include <climits>
+#endif
 
 #ifdef HAS_MV_CAMERA
 #include "CameraDriver/MvCamera.h"
@@ -57,6 +64,22 @@ int main(int argc, char* argv[]) {
 
     if (argc >= 2) serial_port = argv[1];
 
+    // 自动定位项目根目录 (解决从 build/ 运行时相对路径漂移)
+#ifdef __linux__
+    char exe_path[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+    if (len != -1) {
+        exe_path[len] = '\0';
+        std::string exe_dir = dirname(exe_path);
+        // 如果从 build/ 运行, 上一级就是项目根; 否则就是 exe 所在目录本身
+        std::string bin_name = exe_dir;
+        if (bin_name.size() >= 6 && bin_name.substr(bin_name.size() - 6) == "/build")
+            chdir((exe_dir + "/..").c_str());
+        else
+            chdir(exe_dir.c_str());
+    }
+#endif
+
 #ifdef HAS_MV_CAMERA
     MvCamera camera;
     camera.open("config/bean_sorting.yaml");
@@ -73,9 +96,11 @@ int main(int argc, char* argv[]) {
     BeanDetector detector;
     detector.setConfThreshold(0.55f);
     detector.setNmsThreshold(0.1);
-    if (!detector.loadModel("models/best_opset11.onnx")) {
+    if (!detector.loadModel("models/best7.onnx")) {
         std::cerr << "[Main] 模型未加载, 仅通信测试" << std::endl;
     }
+    // 比赛时设 false：跳过每帧 debug_ 克隆, 省 ~3.75MB/帧
+    detector.setDebugEnabled(true);
 
     cv::namedWindow("Bean Sorting", cv::WINDOW_AUTOSIZE);
 
@@ -90,7 +115,6 @@ int main(int argc, char* argv[]) {
     State state             = State::IDLE;
     int   last_bean_class   = -1;//上次识别豆子类型-1无
     auto  t_last_log        = std::chrono::steady_clock::now();//日志计时器
-    bool  collect_started   = false;
 
     // 单向通信延迟: 发完帧后等N帧再切状态, 给电控处理时间
     static constexpr int kSendDelay = 15;   // 0.5秒 15帧
@@ -155,7 +179,6 @@ int main(int argc, char* argv[]) {
         // ---- BEAN_SENT: 等待冷却, 然后切COLLECT ----
         if (state == State::BEAN_SENT) {
             if (send_cooldown == 0) {
-                collect_started = false;
                 state = State::COLLECT;
                 std::cout << "[TX] === 开始收集数字 ===" << std::endl;
             }
@@ -173,7 +196,6 @@ int main(int argc, char* argv[]) {
                     // 豆子变了, 重置所有状态
                     for (int i = 0; i < kDigitCount; ++i) digit_ok[i] = 0;
                     last_bean_class = cur_class;
-                    collect_started = false;
 
                     auto v = detector.toVisionData(beans[best],
                         map_bean_to_box(beans[best].bean_type));
@@ -278,9 +300,9 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // 每秒状态打印
+        // 每5秒一次状态日志 (旧版每秒刷, 树莓派终端I/O开销不小)
         auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - t_last_log).count() >= 1.0) {
+        if (std::chrono::duration<double>(now - t_last_log).count() >= 5.0) {
             t_last_log = now;
             switch (state) {
             case State::IDLE:       std::cout << "[TX] IDLE" << std::endl; break;
