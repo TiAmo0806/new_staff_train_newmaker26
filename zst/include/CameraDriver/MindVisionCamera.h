@@ -23,10 +23,13 @@ public:
     //防止构造函数发生隐式转换
     ~MindVisionCamera();
 
-    // 初始化 SDK、打开相机、设置输出 BGR8。
+    // 首次调用时初始化SDK和相机；相机已初始化但暂停时只恢复采集。
     bool open();
 
-    // 释放相机句柄。
+    // 暂停取图并释放USB传输带宽，但保留相机句柄，供0/1快速开关。
+    bool pause();
+
+    // 停止采集并释放相机句柄。只用于掉线重连或程序退出。
     void close();
 
     // 读取一帧图像，输出 OpenCV BGR Mat。返回的Mat引用内部缓存，下一次read前有效。
@@ -39,6 +42,8 @@ private:
     CameraConfig config_;                       // 曝光/增益配置的只读副本
     bool sdkInitialized_ = false;               // SDK全局初始化只做一次，重连时只重开设备
     int handle_ = -1;                           // MindVision SDK 相机句柄，-1 表示未打开
+    bool acquisitionStarted_ = false;           // 至少成功调用过一次CameraPlay，close前应CameraStop
+    bool playing_ = false;                      // 当前是否处于采集状态；pause后为false
     tSdkCameraCapbility capability_{};         // 相机能力参数：最大分辨率等
     std::vector<unsigned char> bgrBuffer_;     // BGR 图像缓存，每帧复用避免反复分配
 };

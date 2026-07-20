@@ -90,7 +90,7 @@ int main(int argc, char **argv)
     // competition：启动时关闭，收到电控camera_state=1后才打开；
     // debug：启动后主循环立即打开，不需要等待电控，便于日常调模型和画面。
     MindVisionCamera camera(config.camera);             // 保存相机配置，暂不打开设备
-    bool cameraIsOpen = false;                          // SDK当前没有持有相机句柄
+    bool cameraIsOpen = false;                          // 当前是否正在采集；暂停时为false
     bool cameraEnabled = config.runMode == AppRunMode::Debug;
 
     // 3. 优先初始化串口。
@@ -154,6 +154,21 @@ int main(int argc, char **argv)
     const std::string windowName = "Logistics Vision";
     if (config.showWindow) cv::namedWindow(windowName, cv::WINDOW_NORMAL); // 创建可缩放窗口
 
+    int consecutiveCaptureFailures = 0;
+    auto nextCameraOpenAttempt = std::chrono::steady_clock::now();
+
+    // 正常开关只暂停采集并保留SDK句柄，避免CameraUnInit/CameraInit反复操作USB设备。
+    // 如果暂停失败，再完整释放句柄，让下一次开启走干净的重新初始化流程。
+    auto pauseCamera = [&]() {
+        if (cameraIsOpen && !camera.pause())
+        {
+            std::cerr << "[CameraControl] 暂停失败，改为完整释放相机" << std::endl;
+            camera.close();
+        }
+        cameraIsOpen = false;
+        consecutiveCaptureFailures = 0;
+    };
+
     // 三个位置都会处理按键：正常取图、相机取图失败、以及相机关闭等待时。
     // debug模式：0关闭相机、1打开相机；A/B切队；R清空本场；Q/ESC退出。
     auto handleKey = [&](int key) {
@@ -163,13 +178,13 @@ int main(int argc, char **argv)
         if (config.runMode == AppRunMode::Debug && key == '0')
         {
             cameraEnabled = false;
-            if (cameraIsOpen) camera.close();
-            cameraIsOpen = false;
-            std::cout << "[CameraControl] debug键盘命令0：相机已关闭" << std::endl;
+            pauseCamera();
+            std::cout << "[CameraControl] debug键盘命令0：相机采集已暂停" << std::endl;
         }
         if (config.runMode == AppRunMode::Debug && key == '1')
         {
-            cameraEnabled = true; // 下一轮由统一打开/重连分支调用camera.open()
+            cameraEnabled = true; // 下一轮由统一分支恢复采集或重新打开
+            nextCameraOpenAttempt = std::chrono::steady_clock::now();
             std::cout << "[CameraControl] debug键盘命令1：准备打开相机" << std::endl;
         }
         // 新一场比赛开始前按R：同时清空内存投票和磁盘断点。
@@ -178,7 +193,6 @@ int main(int argc, char **argv)
         return false;
     };
 
-    int consecutiveCaptureFailures = 0;
     cv::Mat lastDebugImage;                            // 相机短暂掉线时保持窗口可响应
     std::string lastDebugFinalLayout;                  // 最终5位数组只打印一次
 
@@ -227,19 +241,18 @@ int main(int argc, char **argv)
             cameraEnabled = requestedEnabled;
             if (!cameraEnabled)
             {
-                // 只关闭相机SDK，不退出程序、不关闭串口，也不清空A/B识别和断点数据。
+                // 只暂停相机采集，不退出程序、不关闭串口，也不清空A/B识别和断点数据。
                 // 因此A组识别完豆子后收到0，之后再收到1仍会直接进入数字阶段。
-                if (cameraIsOpen) camera.close();
-                cameraIsOpen = false;
-                consecutiveCaptureFailures = 0;
-                std::cout << "[CameraControl] 收到camera_state=0，相机已关闭，串口继续监听"
+                pauseCamera();
+                std::cout << "[CameraControl] 收到camera_state=0，相机采集已暂停，串口继续监听"
                           << std::endl;
             }
             else
             {
                 // 不在接收函数里直接open，避免串口协议层依赖相机SDK；
                 // 本轮下面的统一重连分支会执行camera.open()。
-                std::cout << "[CameraControl] 收到camera_state=1，准备打开相机" << std::endl;
+                nextCameraOpenAttempt = std::chrono::steady_clock::now();
+                std::cout << "[CameraControl] 收到camera_state=1，准备恢复或打开相机" << std::endl;
             }
         }
 
@@ -259,6 +272,18 @@ int main(int argc, char **argv)
         // camera_state=1但相机尚未打开，或之前USB掉线导致句柄关闭时，在这里统一重试。
         if (!cameraIsOpen)
         {
+            const auto now = std::chrono::steady_clock::now();
+            if (now < nextCameraOpenAttempt)
+            {
+                if (config.showWindow)
+                {
+                    if (!lastDebugImage.empty()) cv::imshow(windowName, lastDebugImage);
+                    if (handleKey(cv::waitKey(1))) break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+
             std::cout << "[CameraControl] 正在打开相机" << std::endl;
             cameraIsOpen = camera.open();
             if (cameraIsOpen)
@@ -269,8 +294,9 @@ int main(int argc, char **argv)
             else
             {
                 std::cerr << "[CameraControl] 相机打开失败，1秒后继续尝试" << std::endl;
+                nextCameraOpenAttempt = now + std::chrono::seconds(1);
                 if (config.showWindow && handleKey(cv::waitKey(1))) break;
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
         }
@@ -302,19 +328,11 @@ int main(int argc, char **argv)
                 std::cerr << "[CameraWatchdog] 尝试重新打开相机" << std::endl;
                 camera.close();
                 cameraIsOpen = false;
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
-                cameraIsOpen = camera.open();
-                if (cameraIsOpen)
-                {
-                    std::cout << "[CameraWatchdog] 相机重连成功" << std::endl;
-                    consecutiveCaptureFailures = 0;
-                }
-                else
-                {
-                    std::cerr << "[CameraWatchdog] 相机重连失败，1秒后继续尝试" << std::endl;
-                    consecutiveCaptureFailures = config.camera.reconnectAfterFailures;
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
-                }
+                consecutiveCaptureFailures = 0;
+                nextCameraOpenAttempt =
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+                std::cout << "[CameraWatchdog] 已释放旧句柄，300ms后由主循环重连"
+                          << std::endl;
             }
             continue;
         }

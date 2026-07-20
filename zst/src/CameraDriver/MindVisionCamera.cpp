@@ -1,5 +1,6 @@
 #include "CameraDriver/MindVisionCamera.h"
 
+#include <chrono>
 #include <iostream>
 
 MindVisionCamera::MindVisionCamera(const CameraConfig &config)
@@ -14,7 +15,24 @@ MindVisionCamera::~MindVisionCamera()
 
 bool MindVisionCamera::open()
 {
-    if (handle_ >= 0) return true;               // 已打开时避免重复初始化设备
+    // 正常0/1开关只暂停和恢复采集，不反复枚举、初始化、销毁USB相机。
+    if (handle_ >= 0)
+    {
+        if (playing_) return true;
+        const int status = CameraPlay(handle_);
+        if (status != CAMERA_STATUS_SUCCESS)
+        {
+            std::cerr << "[Camera] 恢复采集失败，status=" << status << std::endl;
+            // 暂停期间USB设备可能已经掉线。释放旧句柄后，主循环下一次重试会
+            // 重新枚举设备，而不是永远对同一个失效句柄重复CameraPlay。
+            close();
+            return false;
+        }
+        acquisitionStarted_ = true;
+        playing_ = true;
+        std::cout << "[Camera] 已恢复采集（复用现有相机句柄）" << std::endl;
+        return true;
+    }
 
     // SDK全局初始化只做一次；相机掉线重连时只重新枚举并CameraInit设备。
     if (!sdkInitialized_)
@@ -77,6 +95,8 @@ bool MindVisionCamera::open()
         close();
         return false;
     }
+    acquisitionStarted_ = true;
+    playing_ = true;
 
     // 根据相机最大分辨率分配 BGR 缓存
     const int maxW = capability_.sResolutionRange.iWidthMax;   // 最大宽度
@@ -90,18 +110,59 @@ bool MindVisionCamera::open()
     return true;
 }
 
+bool MindVisionCamera::pause()
+{
+    if (handle_ < 0 || !playing_) return true;   // 未初始化或已经暂停，视为目标状态已满足
+
+    const int status = CameraPause(handle_);
+    if (status != CAMERA_STATUS_SUCCESS)
+    {
+        std::cerr << "[Camera] 暂停采集失败，status=" << status << std::endl;
+        return false;
+    }
+
+    playing_ = false;
+    std::cout << "[Camera] 已暂停采集并保留相机句柄" << std::endl;
+    return true;
+}
+
 void MindVisionCamera::close()
 {
     if (handle_ >= 0)
     {
-        CameraUnInit(handle_);                  // 释放 MindVision 相机资源
-        handle_ = -1;                           // 标记句柄为未打开
+        const auto startedAt = std::chrono::steady_clock::now();
+
+        // SDK文档说明CameraStop通常应在反初始化时调用。原代码在CameraPlay状态下
+        // 直接CameraUnInit，部分Linux/USB环境会等待采集线程退出，从而卡住主循环。
+        if (acquisitionStarted_)
+        {
+            const int stopStatus = CameraStop(handle_);
+            if (stopStatus != CAMERA_STATUS_SUCCESS)
+                std::cerr << "[Camera] 停止采集返回异常，status=" << stopStatus
+                          << "，仍继续释放句柄" << std::endl;
+        }
+        acquisitionStarted_ = false;
+        playing_ = false;
+
+        const int uninitStatus = CameraUnInit(handle_);    // 停采后再释放MindVision资源
+        handle_ = -1;                                      // 无论SDK返回值如何都不再复用旧句柄
+        bgrBuffer_.clear();                                // 下次完整打开时按能力重新分配
+        capability_ = {};
+
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startedAt).count();
+        if (uninitStatus != CAMERA_STATUS_SUCCESS)
+            std::cerr << "[Camera] 释放相机句柄返回异常，status=" << uninitStatus
+                      << "，耗时=" << elapsedMs << "ms" << std::endl;
+        else
+            std::cout << "[Camera] 已停止并释放相机句柄，耗时="
+                      << elapsedMs << "ms" << std::endl;
     }
 }
 
 bool MindVisionCamera::read(cv::Mat &image)
 {
-    if (handle_ < 0)
+    if (handle_ < 0 || !playing_)
     {
         return false;                           // 相机未打开
     }
