@@ -1,5 +1,6 @@
 #include "task/TaskStateMachine.h"
 
+#include "task/BeanInference.h"
 #include "task/DigitInference.h"
 #include "utils/DebugLogger.h"
 
@@ -409,7 +410,9 @@ bool TaskStateMachine::handleArriveBean(Protocol& protocol,
     (void)force_print;
 
     VisionResult result;
-    if (!runner_.scanBeans(result)) {
+    const bool runner_success = runner_.scanBeans(result);
+    const bool has_partial_bean_result = result.p1.valid || result.p2.valid || result.p3.valid;
+    if (!runner_success && !has_partial_bean_result) {
         std::cout << "[RECOGNITION][BEAN][FAILED] reason=" << result.reason
                   << " bean_bind_sent=false"
                   << " action=wait_for_arrive_bean\n";
@@ -417,7 +420,32 @@ bool TaskStateMachine::handleArriveBean(Protocol& protocol,
         return true;
     }
 
-    return acceptBeanResult(result, protocol, serial);
+    const std::string scan_reason = result.reason;
+    BeanInference inference;
+    const BeanInferenceResult inference_result = inference.analyze(result);
+    if (!inference_result.complete) {
+        std::cout << "[BEAN] incomplete reason=" << inference_result.reason;
+        if (!runner_success) {
+            std::cout << " scan_reason=" << scan_reason;
+        }
+        std::cout << " bean_bind_sent=false\n";
+        setState(TaskState::WAIT_BEAN_COMMAND);
+        return true;
+    }
+
+    if (inference_result.inferred) {
+        const std::string inference_sources = inference_result.inferred_position == "P1" ? "P2/P3" :
+                                              inference_result.inferred_position == "P2" ? "P1/P3" :
+                                                                                           "P1/P2";
+        std::cout << "[BEAN INFERENCE] " << inference_result.inferred_position
+                  << " = " << inference_result.inferred_class
+                  << " inferred from " << inference_sources << "\n";
+        std::cout << "[BEAN] complete by inference\n";
+    } else {
+        std::cout << "[BEAN] complete\n";
+    }
+
+    return acceptBeanResult(inference_result.completed_result, protocol, serial);
 }
 
 /**

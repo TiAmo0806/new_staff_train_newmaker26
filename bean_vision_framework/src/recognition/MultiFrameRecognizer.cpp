@@ -133,6 +133,8 @@ VisionResult MultiFrameRecognizer::scan(InputManager& input,
         std::this_thread::sleep_for(std::chrono::milliseconds(config_.scan.stable_delay_ms));
     }
 
+    VisionResult best_partial_result;
+    int best_partial_valid_count = 0;
     for (int retry = 1; retry <= config_.scan.max_retry; ++retry) {
         std::cout << "[SCAN] capture " << config_.scan.frames_per_scan
                   << " frames retry=" << retry << "/" << config_.scan.max_retry << "\n";
@@ -209,6 +211,15 @@ VisionResult MultiFrameRecognizer::scan(InputManager& input,
                                    config_.debug.print_vote_result);
             merged.success = merged.p1.valid && merged.p2.valid && merged.p3.valid;
             merged.reason = merged.success ? "ok" : "bean_scan_failed";
+
+            const int valid_count = static_cast<int>(merged.p1.valid) +
+                                    static_cast<int>(merged.p2.valid) +
+                                    static_cast<int>(merged.p3.valid);
+            if (!merged.success && valid_count > best_partial_valid_count) {
+                // 只保留单次 retry 内投票融合出的结果，不跨 retry 拼接 P 位置。
+                best_partial_result = merged;
+                best_partial_valid_count = valid_count;
+            }
         } else {
             // 数字区不强制 L4-L8 全部出现，只要识别到有效数字位置即可生成最终任务。
             merged.l4 = chooseVote(votes, "L4", config_.scan.min_vote_count,
@@ -263,6 +274,11 @@ VisionResult MultiFrameRecognizer::scan(InputManager& input,
     }
 
     std::cout << "[WARN] " << (scan_beans ? "bean" : "digit") << " scan failed after retries\n";
+    if (scan_beans && best_partial_valid_count > 0) {
+        best_partial_result.success = false;
+        best_partial_result.reason = "bean_scan_partial_after_retries";
+        return best_partial_result;
+    }
     VisionResult failed;
     failed.success = false;
     failed.reason = scan_beans ? "bean_scan_failed_after_retries" : "digit_scan_failed_after_retries";
