@@ -1,4 +1,5 @@
-#include "/home/newmaker-11/mvs_openvino_demo/include/preprocess.hpp"
+#include "preprocess.hpp"
+
 cv::Mat preprocess(const cv::Mat& frame) {
     // 1. BGR → RGB
     cv::Mat rgb;

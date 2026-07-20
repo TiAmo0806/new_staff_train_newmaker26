@@ -1,4 +1,4 @@
-#include "/home/newmaker-11/mvs_openvino_demo/include/camera.hpp"
+#include "camera.hpp"
 #include <stdio.h>
 
 Camera::Camera()

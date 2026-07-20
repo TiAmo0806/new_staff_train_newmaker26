@@ -8,12 +8,11 @@
 #include <opencv2/opencv.hpp>
 
 /**
- * 检测对象的中心坐标信息（从 Detection 扩展）
+ * 检测对象的中心坐标（从 Detection 提取）
  */
 struct ObjectCenter {
     int    class_id;       // 类别 ID
     std::string class_name; // 类别名称
-    float  x1, y1, x2, y2; // 4 个角坐标
     float  cx, cy;         // 中心坐标
 
     /// 从 Detection 构造，自动计算中心点
@@ -21,60 +20,39 @@ struct ObjectCenter {
 };
 
 /**
- * 两个对象之间的相对位置关系
- */
-struct SpatialRelation {
-    std::string objectA;    // 对象 A 名称
-    std::string objectB;    // 对象 B 名称
-    std::string xRelation;  // X 方向关系: "左边" / "右边" / "同一列"
-    std::string yRelation;  // Y 方向关系: "前面" / "后面" / "同一行"
-};
-
-/**
- * 空间位置分析器
+ * 按 X 坐标排序器
  *
- * 相机视角约定（俯拍/斜拍桌面）：
- *   - Y 轴：画面下方 = 离相机近 = "前面"
- *           画面上方 = 离相机远 = "后面"
- *   - X 轴：画面左边 = "左边"，画面右边 = "右边"
+ * 将检测到的物体按中心点 X 坐标从小到大（从左到右）排序，
+ * 输出排序后的类别 ID 序列。
  */
-class SpatialAnalyzer {
+class SpatialSorter {
 public:
-    /// 允许偏差（像素），小于此值视为"同行"或"同列"
-    float xTolerance = 50.0f;
-    float yTolerance = 50.0f;
-
     /**
-     * 分析所有检测对象之间的相对位置关系
+     * 按中心 X 坐标从左到右排序
      *
      * @param detections  模型检测结果
-     * @return            所有对象两两之间的位置关系
+     * @return            按 X 坐标升序排列的检测结果
      */
-    std::vector<SpatialRelation> analyze(
-        const std::vector<Detection>& detections) const;
+    static std::vector<Detection> sortLeftToRight(
+        const std::vector<Detection>& detections);
 
     /**
-     * 获取所有对象的中心点信息（含 4 角坐标）
+     * 提取中心点并按 X 坐标升序排列
      */
-    std::vector<ObjectCenter> extractCenters(
-        const std::vector<Detection>& detections) const;
+    static std::vector<ObjectCenter> sortedCenters(
+        const std::vector<Detection>& detections);
 
     /**
-     * 将一组位置关系格式化为可读文字
-     * 例如: "soybean 在 mung_bean 的左边，后面"
+     * 将排序后的检测结果格式化为序列字符串
+     * 例如: "2413" 表示从左到右依次是 class_id=2,4,3,1
      */
-    static std::string format(const SpatialRelation& rel);
+    static std::string formatOrder(const std::vector<Detection>& sorted);
 };
 
 /**
- * 在图像上绘制中心点和位置关系连线（可选）
- *
- * @param frame       被绘制的图像
- * @param centers     对象中心点集合
- * @param relations   位置关系集合（为空则不画连线）
+ * 在图像上绘制中心点
  */
 void drawCenters(cv::Mat& frame,
-                 const std::vector<ObjectCenter>& centers,
-                 const std::vector<SpatialRelation>& relations = {});
+                 const std::vector<ObjectCenter>& centers);
 
 #endif // SPATIAL_HPP

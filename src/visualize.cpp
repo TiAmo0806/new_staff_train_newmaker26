@@ -1,4 +1,4 @@
-#include "/home/newmaker-11/mvs_openvino_demo/include/visualize.hpp"
+#include "visualize.hpp"
 #include "detector.hpp"   // for Detection struct
 
 #include <stdio.h>
