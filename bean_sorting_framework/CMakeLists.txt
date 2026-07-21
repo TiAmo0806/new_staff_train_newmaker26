@@ -152,3 +152,4 @@ message(STATUS "")
 message(STATUS "Run:")
 message(STATUS "  ./bean_sorting ../config/vision.yaml")
 message(STATUS "")
+

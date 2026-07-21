@@ -1,0 +1,11 @@
+关：把自启文件移走
+
+  mv ~/.config/autostart/vision_daemon.desktop ~/.config/autostart/vision_daemon.desktop.bak
+
+  开：移回来
+
+  mv ~/.config/autostart/vision_daemon.desktop.bak ~/.config/autostart/vision_daemon.desktop
+
+  当前状态查一下：
+
+  ls ~/.config/autostart/vision_daemon*

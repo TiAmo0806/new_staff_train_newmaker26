@@ -94,8 +94,8 @@ int main(int argc, char* argv[]) {
     }
 
     BeanDetector detector;
-    detector.setConfThreshold(0.55f);
-    detector.setNmsThreshold(0.1);
+    detector.setConfThreshold(0.66f);
+    detector.setNmsThreshold(0.05);
     if (!detector.loadModel("models/best7.onnx")) {
         std::cerr << "[Main] 模型未加载, 仅通信测试" << std::endl;
     }
