@@ -1,7 +1,7 @@
 camera:
-  exposure_us: 30000           #曝光时间8ms
-  gain: 8                    #模拟增益
-  auto_exposure: false
+  exposure_us: 8000           #曝光时间8ms
+  gain: 8                     #模拟增益
+  auto_exposure: true
   frame_timeout_ms: 200       # 单次等帧超时；比原来的1000ms更快发现USB/相机异常
   reconnect_after_failures: 5 # 连续失败5次后自动关闭并重新打开相机
 
@@ -19,18 +19,20 @@ model:
 serial:
   port: "/dev/ttyACM0"                 # STM32 CDC 常见为 ttyACM，USB转串口常见为 ttyUSB
   baudrate: 115200                      # 当前 C++ 实现固定为 115200-8-N-1
-  simulated: true                      # true只打印不发送；接上电控实测时改为 false
+  simulated: true                       # true只打印不发送；接上电控实测时改为 false
   tx_log: true                          # 打印 A6...CRC 的完整十六进制发送帧
   rx_log: true                          # 打印 5A camera_state CRC 的电控接收帧
 
 # 两个队伍使用不同 C 板、不同时间上场，但共用视觉程序和物理串口。
-# team_a：识别3个豆子后发送0x10；再识别数字并发送0x11，共两次3字节结果。
+# team_a：直接识别3豆或识别前2豆并推测place3后发送0x10；再发送数字0x11。
 # team_b：中心第1个豆子 -> 全部数字位置数组 -> 中心剩余新豆子；豆子顺序不固定。
 workflow:
   team_mode: "team_a"                  # 只选择电脑内部流程，不作为字段发送给电控
   vote_frames_per_stage: 20            # 每个阶段累计多少帧后投票
   min_hits_per_stage: 6                # 仅B组中心单豆：类别至少命中多少帧才算稳定
-  min_consistent_order_frames: 15      # A组3豆/数字4目标：同帧完整排列至少15/20帧一致才保存
+  min_complete_bean_order_frames: 12   # A组三豆从左到右同一完整排列达到12/20帧就直接保存
+  min_inferred_bean_order_frames: 15   # 否则前两豆从左到右同一排列达到15/20帧，推测place3
+  min_consistent_order_frames: 15      # A/B数字4目标从右到左至少15/20帧一致才保存
                                         # 数字排列通过后，再用15减去前四位数字之和推断place5
   team_b_center_width_ratio: 0.40      # 仅B组：只接受画面横向中间40%的豆子，A组不受影响
   clear_progress_on_start: true        # 每次启动自动删除上场断点；相机0/1开关不会清理当前内存

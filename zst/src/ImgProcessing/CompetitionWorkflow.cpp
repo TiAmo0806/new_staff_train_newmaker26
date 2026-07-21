@@ -12,7 +12,7 @@ namespace
 // B组从所有豆子中选择“位于中心区域、距离画面中心最近”的唯一目标。
 // 不预设黄豆/绿豆/白芸豆顺序，中心是什么就返回什么；是否已经识别过由收集器判断。
 // 其他豆子不送进FieldStateCollector，因此不会保存、不会标记为已识别，也不会影响后续阶段。
-// A组不会调用本函数，仍由FieldStateCollector按X坐标从右到左保存全部豆子。
+// A组不会调用本函数，仍由FieldStateCollector按X坐标从左到右保存全部豆子。
 std::vector<Detection> centerBean(const std::vector<Detection> &detections,
                                   int imageWidth,
                                   float centerWidthRatio)
@@ -109,10 +109,16 @@ CompetitionWorkflow::CompetitionWorkflow(const CompetitionWorkflowConfig &config
 
 FieldStateCollector CompetitionWorkflow::makeCollector() const
 {
-    // TeamA使用完整3豆排列一致性投票；TeamB仍按中心单豆类别投票。
+    // TeamA优先使用完整3豆排列，必要时以前两豆推测place3；TeamB按中心单豆投票。
     FieldStateCollectorConfig collectorConfig;
     collectorConfig.voteFramesPerAngle = std::max(1, config_.voteFramesPerStage);   // 至少 1 帧
     collectorConfig.minHitsPerAngle = std::max(1, config_.minHitsPerStage);         // 至少 1 次
+    collectorConfig.minCompleteBeanOrderFrames =
+        std::clamp(config_.minCompleteBeanOrderFrames, 1,
+                   collectorConfig.voteFramesPerAngle);
+    collectorConfig.minInferredBeanOrderFrames =
+        std::clamp(config_.minInferredBeanOrderFrames, 1,
+                   collectorConfig.voteFramesPerAngle);
     collectorConfig.minConsistentOrderFrames =
         std::clamp(config_.minConsistentOrderFrames, 1,
                    collectorConfig.voteFramesPerAngle);
@@ -169,14 +175,16 @@ bool CompetitionWorkflow::loadProgress()
     int ignoredNextSequence = 1;
 
     // version 1/2是旧A组“先数字后豆子”流程；version 3是A组最后合并发送6字节；
-    // version 4开始在豆子、数字识别完成后各发送一次3字节结果。B组结构没有改变。
+    // version 4改为豆子、数字各发送一次；version 5把A组豆子位置改成从左到右。
+    // B组结构没有改变，仍可恢复旧版本断点。
     bool parsed = readExpectedKey(input, "version") && static_cast<bool>(input >> version)
                && readExpectedKey(input, "mode") && static_cast<bool>(input >> savedMode)
                && readExpectedKey(input, "stage") && static_cast<bool>(input >> savedStage);
     if (parsed && version == 2)
         parsed = readExpectedKey(input, "next_sequence")
               && static_cast<bool>(input >> ignoredNextSequence);
-    parsed = parsed && (version == 1 || version == 2 || version == 3 || version == 4)
+    parsed = parsed &&
+          (version == 1 || version == 2 || version == 3 || version == 4 || version == 5)
           && readExpectedKey(input, "beans")
           && static_cast<bool>(input >> beanCodes[0] >> beanCodes[1] >> beanCodes[2])
           && readExpectedKey(input, "boxes")
@@ -202,11 +210,11 @@ bool CompetitionWorkflow::loadProgress()
         return false;
     }
 
-    // A组旧断点无法证明豆子位置消息是否已发送；继续恢复可能让电控漏掉第一帧。
-    // 因此A组只恢复version 4，B组旧断点仍可正常恢复。
-    if (config_.mode == TeamMode::TeamA && version < 4)
+    // A组version 4及以前使用不同流程或不同豆子位置方向，继续恢复会造成错位。
+    // 因此A组只恢复version 5，B组旧断点仍可正常恢复。
+    if (config_.mode == TeamMode::TeamA && version < 5)
     {
-        std::cout << "[WorkflowResume] 检测到旧A组断点版本，因两阶段发送协议已改变，"
+        std::cout << "[WorkflowResume] 检测到旧A组断点版本，因流程或豆子排序方向已改变，"
                      "本次从3个豆子阶段重新开始" << std::endl;
         resetMemory();
         return false;
@@ -318,7 +326,7 @@ bool CompetitionWorkflow::saveProgress() const
     }
 
     const FieldState &current = collector_.state();
-    output << "version 4\n";
+    output << "version 5\n";
     output << "mode " << teamModeToString(config_.mode) << "\n";
     output << "stage " << stage << "\n";
     output << "beans "
@@ -555,13 +563,14 @@ std::vector<VisionTxPacket> CompetitionWorkflow::updateTeamA(
 
     if (teamAStage_ == TeamAStage::WaitingBeans)
     {
-        // A组第一阶段只收集豆子。完整3目标排列通过多帧一致性投票后整批保存。
+        // A组第一阶段只收集豆子：三目标排列可直接确认，或以前两目标推测place3。
         // 因而beanPlaces[0..2]代表物理位置1~3，而不是固定代表黄、绿、白。
         collector_.addBeanFrame(detections);                // 累计豆子帧；中间投票不刷屏
 
         if (collector_.beanReady())
         {
-            std::cout << "[A组识别] 3个豆子全部识别完成" << std::endl;
+            std::cout << "[A组识别] 三个豆子位置已确认（直接识别或两豆推测）"
+                      << std::endl;
             logTeamABeanPositions();                       // 固定按黄、绿、白输出各自位置
             // 第一次发送固定3字节：[黄豆位置, 绿豆位置, 白芸豆位置]。
             packets.push_back(emitPacket(VisionMessageType::TeamABeanPositions,

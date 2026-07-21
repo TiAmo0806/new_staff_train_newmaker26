@@ -12,7 +12,9 @@ struct CompetitionWorkflowConfig
     TeamMode mode = TeamMode::TeamA;        // 当前队伍模式
     int voteFramesPerStage = 20;            // 每阶段累计投票帧数
     int minHitsPerStage = 6;                // B组单个中心豆子的最少命中帧数
-    int minConsistentOrderFrames = 15;      // A组豆子/数字完整排列在一轮中至少一致多少帧
+    int minCompleteBeanOrderFrames = 12;    // A组三豆完整排列的直接保存阈值
+    int minInferredBeanOrderFrames = 15;    // A组前两豆排列稳定并推测place3的阈值
+    int minConsistentOrderFrames = 15;      // A/B数字完整排列在一轮中至少一致多少帧
     float teamBCenterWidthRatio = 0.40f;    // B组中心豆子区域宽度比例
 
     // 无ACK模式下，稳定结果只有在本机完整写入串口后才推进阶段并保存断点。

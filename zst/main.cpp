@@ -25,9 +25,10 @@
 
 namespace
 {
-// 将当前帧有效检测按框中心X从右到左排列。
+// 将当前帧有效检测按框中心X排列；A组豆子阶段左到右，其余调试显示右到左。
 // 这里只用于debug日志和画面提示，不会改变工作流的多帧投票、正式排序和发送数据。
-std::vector<Detection> rightToLeftDetections(const std::vector<Detection> &detections)
+std::vector<Detection> horizontalDetections(const std::vector<Detection> &detections,
+                                             bool leftToRight)
 {
     std::vector<Detection> sorted;
     for (const Detection &d : detections)
@@ -35,17 +36,20 @@ std::vector<Detection> rightToLeftDetections(const std::vector<Detection> &detec
         if (d.kind == TargetKind::Bean || d.kind == TargetKind::DigitBox)
             sorted.push_back(d);
     }
-    std::sort(sorted.begin(), sorted.end(), [](const Detection &a, const Detection &b) {
-        return a.box.x + a.box.width / 2 > b.box.x + b.box.width / 2;
+    std::sort(sorted.begin(), sorted.end(), [leftToRight](const Detection &a,
+                                                          const Detection &b) {
+        const int centerA = a.box.x + a.box.width / 2;
+        const int centerB = b.box.x + b.box.width / 2;
+        return leftToRight ? centerA < centerB : centerA > centerB;
     });
     return sorted;
 }
 
 // OpenCV内置字体不能可靠显示中文，因此窗口上使用短英文；终端仍打印完整中文说明。
-std::string detectionOverlayText(const std::vector<Detection> &sorted)
+std::string detectionOverlayText(const std::vector<Detection> &sorted, bool leftToRight)
 {
     std::ostringstream oss;
-    oss << "YOLO R-L:";
+    oss << (leftToRight ? "YOLO L-R:" : "YOLO R-L:");
     for (const Detection &d : sorted)
     {
         if (d.kind == TargetKind::DigitBox)
@@ -111,14 +115,16 @@ int main(int argc, char **argv)
     VisionSystem vision(config.vision);                 // 创建视觉系统
 
     // 两队共用识别算法、协议编码和物理串口，只切换上层流程状态机。
-    // TeamA：3个豆子完成后发送3字节，再识别数字并发送第二个3字节结果。
-    // A组3豆和A/B数字均要求完整目标同帧出现，并以多帧X顺序一致性投票确认。
+    // TeamA：三个豆子位置经直接识别或两豆推测确认后发送3字节，再识别数字。
+    // A组豆子支持三目标直接确认和前两目标推测place3；A/B数字使用完整顺序投票。
     // TeamB：中心第1个豆子 -> 全部数字place1~5 -> 中心剩余新豆子；类型顺序不固定。
     CompetitionWorkflow workflow(config.workflow);      // 创建比赛工作流
     std::cout << "[Main] 当前队伍: " << teamModeToString(config.workflow.mode)
               << "，投票帧数=" << config.workflow.voteFramesPerStage
               << "，B组单豆最少命中=" << config.workflow.minHitsPerStage
-              << "，完整排列一致阈值=" << config.workflow.minConsistentOrderFrames
+              << "，A组三豆直接阈值=" << config.workflow.minCompleteBeanOrderFrames
+              << "，A组两豆推测阈值=" << config.workflow.minInferredBeanOrderFrames
+              << "，数字完整排列阈值=" << config.workflow.minConsistentOrderFrames
               << "，数字识别=四目标顺序投票+place5推断"
               << "，B组中心区域宽度="
               << (config.workflow.teamBCenterWidthRatio * 100.0f) << "%" << std::endl;
@@ -349,8 +355,11 @@ int main(int argc, char **argv)
         std::vector<Detection> debugSortedDetections;
         if (config.runMode == AppRunMode::Debug)
         {
-            debugSortedDetections = rightToLeftDetections(result.detections);
-            cv::putText(result.debugImage, detectionOverlayText(debugSortedDetections),
+            const bool debugLeftToRight =
+                workflow.mode() == TeamMode::TeamA && !workflow.state().beanReady;
+            debugSortedDetections = horizontalDetections(result.detections, debugLeftToRight);
+            cv::putText(result.debugImage,
+                        detectionOverlayText(debugSortedDetections, debugLeftToRight),
                         cv::Point(20, 75), cv::FONT_HERSHEY_SIMPLEX, 0.65,
                         cv::Scalar(255, 255, 0), 2);
         }
@@ -358,7 +367,7 @@ int main(int argc, char **argv)
         // 7. 当前队伍工作流决定"这一帧是否产生阶段消息"。
         // update只处理识别顺序和生成消息，不直接操作串口，因此TeamA/B流程可以独立测试。
         // 无ACK模式下，只有整帧完整写入Linux串口后才推进；失败时保持待发送状态重试。
-        // imageWidth用于B组选择最靠近画面中心的豆子；A组按从右到左规则排序。
+        // imageWidth用于B组选择最靠近画面中心的豆子；A组豆子左到右、数字右到左。
         const std::vector<VisionTxPacket> packets =
             workflow.update(result.detections, frame.cols); // 工作流更新
         for (const VisionTxPacket &tx : packets)

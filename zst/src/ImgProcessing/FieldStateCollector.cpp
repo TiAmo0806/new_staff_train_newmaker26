@@ -5,8 +5,7 @@
 
 namespace
 {
-// 计算检测框中心点的 x 坐标。
-// 当前角度内需要按“从右到左”保存，所以只需要比较 x。
+// 计算检测框中心点的 x 坐标。A组豆子按X升序（左到右），数字按X降序（右到左）。
 float detectionCenterX(const Detection &d)
 {
     return static_cast<float>(d.box.x) + static_cast<float>(d.box.width) * 0.5f; // 框左边界 + 半宽 = 中心 x
@@ -110,6 +109,7 @@ void FieldStateCollector::resetBeanAngle()
     beanFrameCount_ = 0;                                // 重置当前角度帧数
     beanOrderVotingStarted_ = false;
     beanOrderVotes_.clear();                            // 清空A组完整排列票
+    beanPairOrderVotes_.clear();                        // 清空A组前两豆推测票
     beanStats_ = {};                                    // 清空投票桶
     for (int i = 0; i < static_cast<int>(beanStats_.size()); ++i)
     {
@@ -134,7 +134,7 @@ AngleCommitResult FieldStateCollector::addBeanFrame(const std::vector<Detection>
     }
 
     // 同一帧可能产生同类别重复框。每个豆子类别只选择置信度最高的一个框；
-    // A组用它形成完整排列票，B组用它累计中心单豆类别票。
+    // A组用它形成三豆直接票或两豆推测票，B组用它累计中心单豆类别票。
     std::array<const Detection *, 4> bestDetectionByBean{};
     for (const auto &d : detections)
     {
@@ -170,26 +170,46 @@ AngleCommitResult FieldStateCollector::addBeanFrame(const std::vector<Detection>
     }
     else
     {
-        const bool complete = bestDetectionByBean[1] != nullptr &&
-                              bestDetectionByBean[2] != nullptr &&
-                              bestDetectionByBean[3] != nullptr;
-        if (!beanOrderVotingStarted_ && complete)
-            beanOrderVotingStarted_ = true;             // 首个完整3目标帧启动20帧窗口
-        if (!beanOrderVotingStarted_) return {};         // 尚未完整出现，不消耗投票窗口
+        int distinctBeanCount = 0;
+        for (int code = 1; code <= 3; ++code)
+            if (bestDetectionByBean[code] != nullptr) ++distinctBeanCount;
 
-        if (complete)
+        if (!beanOrderVotingStarted_ && distinctBeanCount >= 2)
+            beanOrderVotingStarted_ = true;             // 首个至少2目标帧启动20帧窗口
+        if (!beanOrderVotingStarted_) return {};         // 尚未出现两个不同豆子，不消耗窗口
+
+        if (distinctBeanCount == 3)
         {
             std::array<const Detection *, 3> completeBeans{
                 bestDetectionByBean[1], bestDetectionByBean[2], bestDetectionByBean[3]
             };
             std::sort(completeBeans.begin(), completeBeans.end(),
                       [](const Detection *a, const Detection *b) {
-                          return detectionCenterX(*a) > detectionCenterX(*b);
+                          return detectionCenterX(*a) < detectionCenterX(*b);
                       });
             std::array<int, 3> order{};
             for (std::size_t i = 0; i < order.size(); ++i)
                 order[i] = static_cast<int>(encodeBeanType(completeBeans[i]->bean));
             beanOrderVotes_[order]++;
+        }
+        else if (distinctBeanCount == 2)
+        {
+            std::array<const Detection *, 2> visibleBeans{};
+            std::size_t index = 0;
+            for (int code = 1; code <= 3; ++code)
+            {
+                if (bestDetectionByBean[code] != nullptr)
+                    visibleBeans[index++] = bestDetectionByBean[code];
+            }
+            std::sort(visibleBeans.begin(), visibleBeans.end(),
+                      [](const Detection *a, const Detection *b) {
+                          return detectionCenterX(*a) < detectionCenterX(*b);
+                      });
+            const std::array<int, 2> pairOrder{
+                static_cast<int>(encodeBeanType(visibleBeans[0]->bean)),
+                static_cast<int>(encodeBeanType(visibleBeans[1]->bean))
+            };
+            beanPairOrderVotes_[pairOrder]++;
         }
         beanFrameCount_++;                              // 启动后缺目标帧也计入20帧窗口
     }
@@ -271,32 +291,77 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
 
     if (!config_.selectMostFrequentBeanOnly)
     {
-        // A组：只有同帧3类齐全时才有一张排列票；寻找20帧内票数最多的X顺序。
-        std::array<int, 3> bestOrder{};
-        int bestVotes = 0;
+        // A组分别统计互斥的三目标直接票和两目标推测票。三目标路径始终优先。
+        std::array<int, 3> bestCompleteOrder{};
+        int bestCompleteVotes = 0;
         int completeFrames = 0;
         for (const auto &[order, votes] : beanOrderVotes_)
         {
             completeFrames += votes;
-            if (votes > bestVotes)
+            if (votes > bestCompleteVotes)
             {
-                bestOrder = order;
-                bestVotes = votes;
+                bestCompleteOrder = order;
+                bestCompleteVotes = votes;
+            }
+        }
+
+        std::array<int, 2> bestPairOrder{};
+        int bestPairVotes = 0;
+        int pairFrames = 0;
+        for (const auto &[order, votes] : beanPairOrderVotes_)
+        {
+            pairFrames += votes;
+            if (votes > bestPairVotes)
+            {
+                bestPairOrder = order;
+                bestPairVotes = votes;
             }
         }
 
         std::ostringstream statusKey;
-        statusKey << "A:" << completeFrames << ':' << bestVotes << ':'
-                  << bestOrder[0] << bestOrder[1] << bestOrder[2];
+        statusKey << "A:" << completeFrames << ':' << bestCompleteVotes << ':'
+                  << bestCompleteOrder[0] << bestCompleteOrder[1] << bestCompleteOrder[2]
+                  << ":P:" << pairFrames << ':' << bestPairVotes << ':'
+                  << bestPairOrder[0] << bestPairOrder[1];
         const bool shouldLog = statusKey.str() != lastBeanStatusLogKey_;
-        if (bestVotes < config_.minConsistentOrderFrames)
+
+        std::array<int, 3> selectedOrder{};
+        bool usedInference = false;
+        if (bestCompleteVotes >= config_.minCompleteBeanOrderFrames)
+        {
+            selectedOrder = bestCompleteOrder;
+        }
+        else if (bestPairVotes >= config_.minInferredBeanOrderFrames)
+        {
+            const int inferredCode = 6 - bestPairOrder[0] - bestPairOrder[1];
+            const bool inferenceInvalid =
+                bestPairOrder[0] < 1 || bestPairOrder[0] > 3 ||
+                bestPairOrder[1] < 1 || bestPairOrder[1] > 3 ||
+                bestPairOrder[0] == bestPairOrder[1] ||
+                inferredCode < 1 || inferredCode > 3 ||
+                inferredCode == bestPairOrder[0] || inferredCode == bestPairOrder[1];
+            if (inferenceInvalid)
+            {
+                std::cerr << "[A组豆子推测] 前两豆编码非法，本轮不保存" << std::endl;
+                lastBeanStatusLogKey_ = statusKey.str();
+                resetBeanAngle();
+                return result;
+            }
+            selectedOrder = {bestPairOrder[0], bestPairOrder[1], inferredCode};
+            usedInference = true;
+        }
+        else
         {
             if (shouldLog)
             {
-                std::cout << "[A组豆子顺序核对] 完整3目标帧=" << completeFrames
+                std::cout << "[A组豆子顺序核对] 三目标帧=" << completeFrames
                           << '/' << config_.voteFramesPerAngle
-                          << "，最高一致顺序票=" << bestVotes
-                          << '/' << config_.minConsistentOrderFrames
+                          << "，最高同序票=" << bestCompleteVotes
+                          << '/' << config_.minCompleteBeanOrderFrames
+                          << "；两目标帧=" << pairFrames
+                          << '/' << config_.voteFramesPerAngle
+                          << "，最高前两位同序票=" << bestPairVotes
+                          << '/' << config_.minInferredBeanOrderFrames
                           << "，本轮不保存" << std::endl;
             }
             lastBeanStatusLogKey_ = statusKey.str();
@@ -304,16 +369,32 @@ AngleCommitResult FieldStateCollector::commitBeanAngle()
             return result;
         }
 
-        std::cout << "[A组豆子顺序核对] 通过，" << bestVotes << '/'
-                  << config_.voteFramesPerAngle << "帧从右到左一致=";
-        for (std::size_t i = 0; i < bestOrder.size(); ++i)
+        if (usedInference)
         {
-            if (i != 0) std::cout << " -> ";
-            std::cout << beanChineseName(bestOrder[i]);
-            state_.beanPlaces[i] = decodeBeanType(bestOrder[i]);
-            seenBeans_[bestOrder[i]] = true;
+            std::cout << "[A组豆子推测] 通过，" << bestPairVotes << '/'
+                      << config_.voteFramesPerAngle << "帧前两豆从左到右一致="
+                      << beanChineseName(selectedOrder[0]) << " -> "
+                      << beanChineseName(selectedOrder[1])
+                      << "，推测place3=" << beanChineseName(selectedOrder[2])
+                      << std::endl;
         }
-        std::cout << std::endl;
+        else
+        {
+            std::cout << "[A组豆子顺序核对] 直接通过，" << bestCompleteVotes << '/'
+                      << config_.voteFramesPerAngle << "帧三豆从左到右一致=";
+            for (std::size_t i = 0; i < selectedOrder.size(); ++i)
+            {
+                if (i != 0) std::cout << " -> ";
+                std::cout << beanChineseName(selectedOrder[i]);
+            }
+            std::cout << std::endl;
+        }
+
+        for (std::size_t i = 0; i < selectedOrder.size(); ++i)
+        {
+            state_.beanPlaces[i] = decodeBeanType(selectedOrder[i]);
+            seenBeans_[selectedOrder[i]] = true;
+        }
         nextBeanIndex_ = 3;
         result.addedCount = 3;
         state_.beanReady = true;

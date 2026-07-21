@@ -18,11 +18,14 @@ struct FieldStateCollectorConfig
     // B组中心豆子是单目标识别，仍按类别在一轮中的命中次数判断稳定性。
     int minHitsPerAngle = 10;
 
-    // A组豆子和A/B数字必须在同一帧出现完整集合，并按X排序形成顺序票。
-    // 例如20帧中至少15帧的完整排列完全相同，才允许保存。
+    // A/B数字必须在同一帧出现完整集合，并按X排序形成顺序票。
     int minConsistentOrderFrames = 15;
 
-    // false（A组）：只统计同帧3豆完整X顺序票。
+    // A组豆子两条互斥路径：三目标直接排列优先；否则允许前两目标稳定后推测place3。
+    int minCompleteBeanOrderFrames = 12;
+    int minInferredBeanOrderFrames = 15;
+
+    // false（A组）：统计同帧3豆完整票和同帧2豆前两位票。
     // true（B组）：只处理投票次数最多的一个中心候选；若它已识别过，本轮不改选其他豆子。
     bool selectMostFrequentBeanOnly = false;
 };
@@ -41,7 +44,7 @@ class FieldStateCollector
 public:
     explicit FieldStateCollector(const FieldStateCollectorConfig &config);
 
-    // 豆子阶段调用：A组仅对同帧完整出现的3种豆子按X排序并投票；
+    // 豆子阶段调用：A组对同帧3豆直接排列和同帧2豆前两位排列分别投票；
     // B组由配置只选最稳定的中心候选。已保存类型不会重复占用bean_place。
     // 同一帧同一豆子类别最多计票一次，重复框只保留置信度最高的一个。
     AngleCommitResult addBeanFrame(const std::vector<Detection> &detections);
@@ -74,7 +77,7 @@ private:
         int count = 0;
 
         // 当前角度中，这个 id 的检测框中心 x 坐标总和。
-        // 用它计算平均 x，实现“当前角度内从右到左排序”。
+        // 仅供B组计算豆子到画面中心的距离，不参与A组左右排序。
         float xSum = 0.0f;
 
         float averageX() const
@@ -86,7 +89,7 @@ private:
     void resetBeanAngle();
     void resetBoxAngle();
 
-    // 当前豆子累计够 voteFramesPerAngle 后调用：A组核对完整排列票，B组核对单目标票。
+    // 当前豆子累计够 voteFramesPerAngle 后调用：A组核对直接/推测票，B组核对单目标票。
     AngleCommitResult commitBeanAngle();
 
     // 当前数字箱累计够 voteFramesPerAngle 后调用；固定执行“前四位识别+place5推断”。
@@ -103,7 +106,7 @@ private:
     // 当前箱子角度已经累计了多少帧。
     int boxFrameCount_ = 0;
 
-    // A组豆子/数字在首次看到完整目标集合后才启动20帧窗口。
+    // A组豆子首次看到至少2个不同类别后启动窗口；数字仍需首次看到完整4目标。
     bool beanOrderVotingStarted_ = false;
     bool boxOrderVotingStarted_ = false;
 
@@ -116,8 +119,12 @@ private:
     // 下标 1~3 分别表示黄豆、绿豆、白芸豆。
     std::array<CandidateStat, 4> beanStats_{};
 
-    // A组豆子完整帧的从右到左排列票；只有同帧3类齐全时才记一票。
+    // A组豆子完整帧的从左到右排列票；只有同帧3类齐全时才记一票。
     std::map<std::array<int, 3>, int> beanOrderVotes_;
+
+    // A组豆子同帧仅出现2类时的从左到右排列票；稳定后视为place1、place2，
+    // 未出现的第三类固定推测到place3。
+    std::map<std::array<int, 2>, int> beanPairOrderVotes_;
 
     // 数字完整帧的从右到左排列票；只有同帧恰好4个不同数字时才记一票。
     std::map<std::array<int, 4>, int> boxOrderVotes_;

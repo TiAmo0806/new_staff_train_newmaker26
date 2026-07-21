@@ -168,6 +168,12 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
                 config.workflow.voteFramesPerStage = w["vote_frames_per_stage"].as<int>();
             if (w["min_hits_per_stage"])
                 config.workflow.minHitsPerStage = w["min_hits_per_stage"].as<int>();
+            if (w["min_complete_bean_order_frames"])
+                config.workflow.minCompleteBeanOrderFrames =
+                    w["min_complete_bean_order_frames"].as<int>();
+            if (w["min_inferred_bean_order_frames"])
+                config.workflow.minInferredBeanOrderFrames =
+                    w["min_inferred_bean_order_frames"].as<int>();
             if (w["min_consistent_order_frames"])
                 config.workflow.minConsistentOrderFrames =
                     w["min_consistent_order_frames"].as<int>();
