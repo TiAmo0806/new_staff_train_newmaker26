@@ -1,0 +1,12 @@
+# Bean Sorting System - Configuration
+# 视觉抓豆分拣系统配置文件
+
+communication:
+  vision_port: "/dev/ttyACM0"    # 视觉端串口
+
+detection:
+  confidence_threshold: 0.5
+  nms_iou_threshold: 0.5       # NMS 重叠阈值
+  stable_threshold_beans: 5    # 豆子连续几帧一致才发送
+  digit_stable_threshold: 3    # 数字连续几帧一致才发送
+
