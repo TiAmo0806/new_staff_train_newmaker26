@@ -19,7 +19,7 @@ model:
 serial:
   port: "/dev/ttyACM0"                 # STM32 CDC 常见为 ttyACM，USB转串口常见为 ttyUSB
   baudrate: 115200                      # 当前 C++ 实现固定为 115200-8-N-1
-  simulated: true                       # true只打印不发送；接上电控实测时改为 false
+  simulated: false                      # 比赛模式接真实电控；无电控测试时改为true
   tx_log: true                          # 打印 A6...CRC 的完整十六进制发送帧
   rx_log: true                          # 打印 5A camera_state CRC 的电控接收帧
 
@@ -35,7 +35,7 @@ workflow:
   min_consistent_order_frames: 15      # A/B数字4目标从右到左至少15/20帧一致才保存
                                         # 数字排列通过后，再用15减去前四位数字之和推断place5
   team_b_center_width_ratio: 0.40      # 仅B组：只接受画面横向中间40%的豆子，A组不受影响
-  clear_progress_on_start: true        # 每次启动自动删除上场断点；相机0/1开关不会清理当前内存
+  clear_progress_on_start: true        # 每次新开机清上场断点；看门狗同次开机重启会覆盖为false
   resume_progress: true                # 仍保存本场断点；只有把上一项临时改false时才允许启动恢复
   progress_file: "runtime/workflow_progress.txt" # 自动清理正式文件及可能残留的.tmp临时文件
 
@@ -43,8 +43,13 @@ runtime:
   # competition：比赛模式，启动后等待电控camera_state=1才打开相机。
   # debug：日常调试模式，程序启动后直接打开相机，并忽略电控camera_state开关命令。
   # 没接电控进行日常调试时，保持 serial.simulated: true，只打印发送帧而不访问硬件。
-  mode: "debug"
-  show_window: true
+  mode: "competition"
+  # 以下调试输出与competition/debug流程模式相互独立。
+  # systemd开机后台运行时保持false；登录Ubuntu桌面后手动运行可临时改true。
+  show_window: false
+  # true会把当前帧按X排序后的结果周期性输出到终端/systemd日志。
+  terminal_detection_log: true
+  terminal_detection_interval_frames: 10
   log_dir: "logs"
   terminal_line_limit: 80
 

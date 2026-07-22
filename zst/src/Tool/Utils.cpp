@@ -143,6 +143,11 @@ bool loadAppConfig(const std::string &path, AppConfig &config)
                 }
             }
             if (r["show_window"]) config.showWindow = r["show_window"].as<bool>();
+            if (r["terminal_detection_log"])
+                config.terminalDetectionLog = r["terminal_detection_log"].as<bool>();
+            if (r["terminal_detection_interval_frames"])
+                config.terminalDetectionIntervalFrames =
+                    std::clamp(r["terminal_detection_interval_frames"].as<int>(), 1, 1000);
             if (r["log_dir"]) config.logDir = r["log_dir"].as<std::string>();
             if (r["terminal_line_limit"]) config.terminalLineLimit = r["terminal_line_limit"].as<int>();
         }

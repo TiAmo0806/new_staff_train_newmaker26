@@ -73,9 +73,11 @@ int main(int argc, char **argv)
 {
     // 显式传参时优先使用用户给出的配置；未传参时根据可执行文件位置查找。
     // 因此无论从 build 目录、项目根目录还是 VS Code 启动，都不会依赖当前工作目录。
-    const std::string configPath = argc > 1
+    const bool firstArgumentIsConfig = argc > 1 && argv[1][0] != '-';
+    const std::string configPath = firstArgumentIsConfig
         ? std::string(argv[1])                          // 命令行传入的配置文件路径
         : findDefaultConfigPath(argv[0]).string();      // 自动查找默认配置
+    const int optionStart = firstArgumentIsConfig ? 2 : 1;
 
     std::cout << "[Main] 配置文件: " << configPath << std::endl;
 
@@ -88,6 +90,29 @@ int main(int argc, char **argv)
         // 模型路径也来自配置文件，继续运行只会在OpenVINO加载ONNX时再次报错。
         std::cerr << "[Main] 配置文件加载失败，程序退出" << std::endl;
         return 1;                                       // 非零退出码表示异常
+    }
+
+    // 命令行开关只覆盖本次运行，不修改vision.yaml，便于比赛模式现场临时调试。
+    for (int i = optionStart; i < argc; ++i)
+    {
+        const std::string option(argv[i]);
+        if (option == "--show-window")
+            config.showWindow = true;
+        else if (option == "--no-window")
+            config.showWindow = false;
+        else if (option == "--terminal-detections")
+            config.terminalDetectionLog = true;
+        else if (option == "--no-terminal-detections")
+            config.terminalDetectionLog = false;
+        else if (option == "--clear-progress-on-start")
+            config.workflow.clearProgressOnStart = true;
+        else if (option == "--keep-progress-on-start")
+            config.workflow.clearProgressOnStart = false;
+        else
+        {
+            std::cerr << "[Main] 未知启动参数: " << option << std::endl;
+            return 1;
+        }
     }
 
     // 2. 先创建工业相机对象，实际打开时机由runtime.mode决定。
@@ -133,6 +158,11 @@ int main(int argc, char **argv)
               << "，波特率=" << config.serial.baudrate
               << "，TX日志=" << (config.serial.txLog ? "开启" : "关闭")
               << "，RX日志=" << (config.serial.rxLog ? "开启" : "关闭") << std::endl;
+    std::cout << "[DebugOutput] 图像窗口=" << (config.showWindow ? "开启" : "关闭")
+              << "，终端实时识别="
+              << (config.terminalDetectionLog ? "开启" : "关闭")
+              << "，终端输出间隔=" << config.terminalDetectionIntervalFrames << "帧"
+              << std::endl;
     if (config.runMode == AppRunMode::Debug)
     {
         std::cout << "[CameraControl] 当前为debug调试模式：程序将直接打开相机，"
@@ -201,6 +231,7 @@ int main(int argc, char **argv)
 
     cv::Mat lastDebugImage;                            // 相机短暂掉线时保持窗口可响应
     std::string lastDebugFinalLayout;                  // 最终5位数组只打印一次
+    std::size_t processedFrameCount = 0;               // 控制终端实时识别输出频率
 
     auto sendWorkflowResult = [&](const VisionTxPacket &packet) {
         if (config.runMode == AppRunMode::Debug)
@@ -349,19 +380,33 @@ int main(int argc, char **argv)
         // result.decision：根据比赛规则算出的目标数字箱；
         // result.debugImage：画好框和文字的调试图。
         VisionFrameResult result = vision.process(frame); // 完整一帧视觉处理
+        ++processedFrameCount;
 
-        // debug模式只在图像窗口显示当前帧YOLO结果，不再把单帧抖动持续打印到终端。
-        // 终端只保留收集器输出的多帧稳定核对、排序、缓存和最终发送结果。
+        // 图像和终端调试开关与competition/debug流程模式完全独立。
+        // 排序只用于现场观察，不改变工作流的多帧投票、正式排序和串口数据。
         std::vector<Detection> debugSortedDetections;
-        if (config.runMode == AppRunMode::Debug)
+        const bool debugLeftToRight =
+            workflow.mode() == TeamMode::TeamA && !workflow.state().beanReady;
+        if (config.showWindow || config.terminalDetectionLog)
         {
-            const bool debugLeftToRight =
-                workflow.mode() == TeamMode::TeamA && !workflow.state().beanReady;
             debugSortedDetections = horizontalDetections(result.detections, debugLeftToRight);
+        }
+
+        if (config.showWindow)
+        {
             cv::putText(result.debugImage,
                         detectionOverlayText(debugSortedDetections, debugLeftToRight),
                         cv::Point(20, 75), cv::FONT_HERSHEY_SIMPLEX, 0.65,
                         cv::Scalar(255, 255, 0), 2);
+        }
+
+        if (config.terminalDetectionLog &&
+            processedFrameCount %
+                static_cast<std::size_t>(config.terminalDetectionIntervalFrames) == 0)
+        {
+            std::cout << "[实时识别] "
+                      << detectionOverlayText(debugSortedDetections, debugLeftToRight)
+                      << std::endl;
         }
 
         // 7. 当前队伍工作流决定"这一帧是否产生阶段消息"。
@@ -379,25 +424,29 @@ int main(int argc, char **argv)
         }
 
         // place1~place4通过完整帧X顺序多数票确认后，place5由15减去前四位数字之和推断。
-        // 这里同时在debug终端和画面显示最终五位数组；两队共用同一套数字缓存逻辑。
-        if (config.runMode == AppRunMode::Debug && workflow.state().boxReady)
+        // 最终数组也由独立调试开关控制，不再限制为debug流程模式。
+        if ((config.showWindow || config.terminalDetectionLog) && workflow.state().boxReady)
         {
             const FieldState &state = workflow.state();
             const std::string layoutKey = digitLayoutKey(state);
-            if (layoutKey != lastDebugFinalLayout)
+            if (config.terminalDetectionLog && layoutKey != lastDebugFinalLayout)
             {
-                std::cout << "[Debug最终推断] 数字布局=[place1=" << state.boxPlaces[0]
+                std::cout << "[最终推断] 数字布局=[place1=" << state.boxPlaces[0]
                           << ", place2=" << state.boxPlaces[1]
                           << ", place3=" << state.boxPlaces[2]
                           << ", place4=" << state.boxPlaces[3]
                           << ", place5=" << state.boxPlaces[4] << "]" << std::endl;
                 lastDebugFinalLayout = layoutKey;
             }
-            std::ostringstream overlay;
-            overlay << "FINAL P1-P5:";
-            for (int digit : state.boxPlaces) overlay << ' ' << digit;
-            cv::putText(result.debugImage, overlay.str(), cv::Point(20, 105),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.70, cv::Scalar(0, 255, 255), 2);
+            if (config.showWindow)
+            {
+                std::ostringstream overlay;
+                overlay << "FINAL P1-P5:";
+                for (int digit : state.boxPlaces) overlay << ' ' << digit;
+                cv::putText(result.debugImage, overlay.str(), cv::Point(20, 105),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.70,
+                            cv::Scalar(0, 255, 255), 2);
+            }
         }
 
         // 保存最近一张识别结果图。相机短暂掉线时继续显示该图并处理退出按键。

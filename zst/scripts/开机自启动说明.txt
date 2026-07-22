@@ -1,0 +1,99 @@
+NewMaker视觉桌面开机自启动
+==========================
+
+工作方式：
+
+    开机 -> Ubuntu自动登录 -> 弹出终端 -> 启动competition视觉程序
+
+终端会显示实时识别、稳定投票和串口数据，同时将输出保存在zst/logs中。视觉程序
+异常退出后，看门狗会等待5秒重启；同一次开机内的重启不会清除本场识别进度。
+
+一、安装前配置
+------------
+
+config/vision.yaml建议：
+
+    serial:
+      simulated: false
+
+    runtime:
+      mode: "competition"
+      show_window: false
+      terminal_detection_log: true
+      terminal_detection_interval_frames: 10
+
+show_window保持false，是因为普通开机守护主要通过弹出的终端看结果。需要图像窗口时，
+登录桌面后运行scripts/run_competition_debug.sh。
+
+二、首次安装
+------------
+
+在zst工程根目录执行：
+
+    chmod +x scripts/*.sh
+    ./scripts/setup_autostart.sh install
+
+也兼容旧命令：
+
+    ./scripts/install_autostart.sh
+
+安装脚本自动执行：
+
+1. 自动定位当前zst工程，不写死用户名或工程路径。
+2. 自动查找~/openvino/setupvars.sh和/opt/intel/openvino。
+3. 自动查找用户主目录或zst相邻位置的linuxSDK。
+4. 在build-ubuntu中编译logistics_vision。
+5. 停用旧logistics-vision.service，避免重复占用相机和串口。
+6. 关闭锁屏并配置当前用户GDM自动登录。
+7. 创建~/.config/autostart/newmaker-vision.desktop。
+
+安装完成后：
+
+    sudo reboot
+
+三、常用命令
+------------
+
+查看状态：
+
+    ./scripts/setup_autostart.sh status
+
+关闭下次开机自启动，并停止当前看门狗：
+
+    ./scripts/setup_autostart.sh disable
+
+重新开启下次开机自启动：
+
+    ./scripts/setup_autostart.sh enable
+
+手动启动看门狗：
+
+    ./scripts/setup_autostart.sh daemon
+
+卸载桌面启动项：
+
+    ./scripts/setup_autostart.sh uninstall
+
+卸载不会删除工程、模型、配置和日志，也不会自动还原GDM自动登录设置。原始GDM配置
+备份位置为/etc/gdm3/custom.conf.newmaker-backup。
+
+四、比赛模式图像调试
+------------------
+
+    ./scripts/run_competition_debug.sh
+
+该脚本先停止看门狗，避免两个程序抢占相机和串口，然后保持competition流程、打开
+图像窗口并在当前终端输出识别结果。它默认保留本场进度；按R可以主动清空。
+
+退出图像调试后，手动恢复看门狗：
+
+    ./scripts/setup_autostart.sh daemon
+
+五、查看保存的日志
+----------------
+
+    ls -lt logs/
+    tail -f logs/vision_*.log
+
+最多保留最近5份vision_*.log。
+

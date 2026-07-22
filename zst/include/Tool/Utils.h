@@ -23,7 +23,9 @@ struct AppConfig
     SerialConfig serial;                    // 串口设备、波特率、模拟模式和TX日志
     CompetitionWorkflowConfig workflow;     // A/B流程、投票和断点续跑参数
     AppRunMode runMode = AppRunMode::Competition; // 默认比赛模式，避免上电后意外启动相机
-    bool showWindow = true;                 // 是否显示OpenCV调试窗口
+    bool showWindow = false;                // 是否显示OpenCV调试窗口，与competition/debug流程模式独立
+    bool terminalDetectionLog = true;       // 是否周期性打印当前帧按X排序后的识别结果
+    int terminalDetectionIntervalFrames = 10; // 每隔多少帧打印一次，避免终端刷屏
     std::string logDir = "logs";            // 预留：当前主循环尚未写日志文件
     int terminalLineLimit = 80;             // 预留：当前主循环尚未限制终端行数
 };

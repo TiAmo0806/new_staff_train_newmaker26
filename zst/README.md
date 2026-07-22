@@ -47,21 +47,32 @@ MindVision工业相机
 程序启动时会打印`best5.onnx`的真实输入/输出形状，并严格检查单输入、单输出、
 float32和`[1,3,640,640]`。如果换错模型，会在初始化阶段明确报错，不会继续越界解析。
 
-### debug模式识别与发送日志
+### 比赛/调试模式的识别输出开关
 
-把`runtime.mode`改为`debug`后，相机会直接打开，并增加以下调试信息：
+`runtime.mode`只决定相机由电控控制还是程序直接打开；图像窗口和终端实时识别可以
+独立开关，因此`competition`比赛流程下同样能够观察识别结果：
+
+```yaml
+runtime:
+  mode: "competition"
+  show_window: false
+  terminal_detection_log: true
+  terminal_detection_interval_frames: 10
+```
+
+稳定投票和发送阶段会输出：
 
 ```text
 [数字顺序核对] 通过，15/20帧从右到左一致=2 -> 4 -> 5 -> 1
 [数字推断] place5不可见，15-前四个数字之和=3，已写入place5
-[Debug最终推断] 数字布局=[place1=2, place2=4, place3=5, place4=1, place5=3]
+[最终推断] 数字布局=[place1=2, place2=4, place3=5, place4=1, place5=3]
 [Debug待发送] CMD=0x21，DATA(十进制)=[2 4 5 1 3]
 [Serial] TX A6 21 02 04 05 01 03 CRC_L CRC_H
 ```
 
-单帧YOLO结果不再写终端，只在OpenCV窗口中通过检测框和`YOLO R-L`实时显示；
-终端只保留多帧稳定核对、排序、正式缓存、阶段切换和串口发送。连续多轮出现相同的
-“候选为空/未凑齐/重复豆子”状态时只提示第一次，候选组成变化后才重新提示。
+开启`terminal_detection_log`后，每隔指定帧数打印一次`[实时识别]`；关闭后仍保留
+必要的启动、错误、稳定结果、阶段切换和串口日志。`show_window`只控制OpenCV图像窗口，
+不会改变比赛投票、排序和发送数据。
 
 ## 两队双向通信与识别结果协议
 
