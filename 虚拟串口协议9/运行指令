@@ -1,0 +1,5 @@
+ ./run.sh --simulate//运行全部节点
+ chmod +x run.sh//获取权限
+ sudo usermod -a -G dialout $USER//串口打开权限
+ sync && echo 3 | sudo tee /proc/sys/vm/drop_caches  //解决卡顿问题
+  ls -la /dev/ttyACM* //查看是否连上C板
