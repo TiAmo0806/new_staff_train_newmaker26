@@ -1,0 +1,38 @@
+%YAML:1.0
+---
+# ============================================================
+# MVS OpenVINO Demo — 调参配置文件
+# ============================================================
+# 使用方法:
+#   ./mvs_openvino_demo                  # 使用默认参数
+#   ./mvs_openvino_demo best.xml         # 指定模型，其余从 config.yaml 读取
+#   ./mvs_openvino_demo best.xml config.yaml  # 手动指定模型和配置文件
+# ============================================================
+
+# ---- 模型 ----
+model:
+  path: "./model3/best5.xml"      # 默认模型路径（命令行参数可覆盖）
+  device: "AUTO"                  # 推理设备: AUTO | CPU | GPU | NPU
+
+# ---- 检测器参数 ----
+detector:
+  conf_threshold: 0.4             # 置信度阈值 [0.0, 1.0]，越低框越多
+  nms_threshold: 0.5              # NMS IoU 阈值 [0.0, 1.0]，越低框越少
+  input_width: 640                # 模型输入宽度（需与模型导出时一致）
+  input_height: 640               # 模型输入高度（需与模型导出时一致）
+
+# ---- 相机 ----
+camera:
+  timeout_ms: 1000                # 取帧超时（毫秒）
+
+# ---- 串口通信 ----
+serial:
+  port: "/dev/ttyACM0"            # 串口设备路径
+  tx_log_enabled: true            # 终端打印发送的十六进制帧（调试用）
+  auto_reconnect: true             # 断连后自动扫描重连
+  max_retries: 3                  # 发送失败最大重试次数
+
+# ---- 显示 ----
+display:
+  window_name: "Real-time Detection (ESC to exit)"
+  fps_sample_interval: 1.0        # FPS 统计刷新间隔（秒）
