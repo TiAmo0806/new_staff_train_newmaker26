@@ -25,6 +25,7 @@
 
 namespace
 {
+    
 // 将当前帧有效检测按框中心X排列；A组豆子阶段左到右，其余调试显示右到左。
 // 这里只用于debug日志和画面提示，不会改变工作流的多帧投票、正式排序和发送数据。
 std::vector<Detection> horizontalDetections(const std::vector<Detection> &detections,
